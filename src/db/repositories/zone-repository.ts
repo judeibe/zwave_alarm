@@ -1,23 +1,12 @@
 import type Database from 'better-sqlite3';
 import { randomUUID } from 'node:crypto';
 import { Repository } from '../repository.js';
+import type { ConnectivityStatus, SensorCategory, SensorDevice, SensorState } from './sensor-repository.js';
 
-export type SensorCategory = 'intrusion' | 'life-safety';
-export type SensorState = 'normal' | 'breached';
-export type ConnectivityStatus = 'online' | 'offline';
+export type { ConnectivityStatus, SensorCategory, SensorState };
 
 /** A SensorDevice as joined onto its owning Zone (data-model.md's SensorDevice entity). */
-export interface ZoneSensor {
-  id: string;
-  zwaveNodeId: number;
-  zoneId: string;
-  name: string;
-  category: SensorCategory;
-  currentState: SensorState;
-  batteryLevel: number | null;
-  connectivityStatus: ConnectivityStatus;
-  updatedAt: number;
-}
+export type ZoneSensor = SensorDevice;
 
 export interface Zone {
   id: string;
