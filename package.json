@@ -22,12 +22,14 @@
     "@zwave-js/server": "^3.10.1",
     "better-sqlite3": "^13.0.3",
     "express": "^4.22.2",
+    "express-session": "^1.19.0",
     "typescript": "^5.9.3",
     "ws": "^8.21.3",
     "zwave-js": "^15.28.0"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
+    "@types/express-session": "^1.19.0",
     "@types/supertest": "^7.2.1",
     "eslint": "^10.10.0",
     "eslint-config-prettier": "^10.1.8",
