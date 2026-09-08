@@ -21,7 +21,7 @@
     "@types/ws": "^8.18.1",
     "@zwave-js/server": "^3.10.1",
     "better-sqlite3": "^13.0.3",
-    "express": "^4.22.2",
+    "express": "^5.2.1",
     "express-session": "^1.19.0",
     "typescript": "^5.9.3",
     "ws": "^8.21.3",
