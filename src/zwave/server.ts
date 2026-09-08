@@ -1,27 +1,9 @@
 import { ZwavejsServer } from '@zwave-js/server';
 import { config } from '../config/index.js';
+import { createLogger } from '../config/logger.js';
 import { getDriver, startDriver } from './driver.js';
 
-/**
- * Ad hoc structured console logging, matching the shape T016's shared logger
- * (src/config/logger.ts) will provide — this call site is replaced with the
- * real logger by T016, not reimplemented here (same approach as T009's
- * driver.ts).
- */
-function log(level: 'info' | 'error', message: string, fields: Record<string, unknown> = {}): void {
-  const entry = {
-    timestamp: new Date().toISOString(),
-    level,
-    module: 'zwave/server',
-    message,
-    ...fields,
-  };
-  if (level === 'error') {
-    console.error(JSON.stringify(entry));
-  } else {
-    console.log(JSON.stringify(entry));
-  }
-}
+const logger = createLogger('zwave/server');
 
 let server: ZwavejsServer | undefined;
 let startPromise: Promise<void> | undefined;
@@ -37,10 +19,10 @@ export function getZwaveJsServer(): ZwavejsServer {
     server = new ZwavejsServer(getDriver(), {
       port: config.zwaveServerPort,
       logger: {
-        error: (message) => log('error', typeof message === 'string' ? message : message.message),
-        warn: (message) => log('info', message),
-        info: (message) => log('info', message),
-        debug: (message) => log('info', message),
+        error: (message) => logger.error(typeof message === 'string' ? message : message.message),
+        warn: (message) => logger.warn(message),
+        info: (message) => logger.info(message),
+        debug: (message) => logger.debug(message),
       },
     });
   }

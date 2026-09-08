@@ -1,25 +1,8 @@
 import { Driver } from 'zwave-js';
 import { config } from '../config/index.js';
+import { createLogger } from '../config/logger.js';
 
-/**
- * Ad hoc structured console logging, matching the shape T016's shared logger
- * (src/config/logger.ts) will provide — this call site is replaced with the
- * real logger by T016, not reimplemented here.
- */
-function log(level: 'info' | 'error', message: string, fields: Record<string, unknown> = {}): void {
-  const entry = {
-    timestamp: new Date().toISOString(),
-    level,
-    module: 'zwave/driver',
-    message,
-    ...fields,
-  };
-  if (level === 'error') {
-    console.error(JSON.stringify(entry));
-  } else {
-    console.log(JSON.stringify(entry));
-  }
-}
+const logger = createLogger('zwave/driver');
 
 let driver: Driver | undefined;
 let startPromise: Promise<void> | undefined;
@@ -39,11 +22,11 @@ export function getDriver(): Driver {
     driver = new Driver(config.serialPort);
 
     driver.on('error', (err) => {
-      log('error', 'zwave-js driver failed', { error: err.message });
+      logger.error('zwave-js driver failed', { error: err.message });
     });
 
     driver.once('driver ready', () => {
-      log('info', 'zwave-js driver ready');
+      logger.info('zwave-js driver ready');
     });
   }
 
