@@ -1,0 +1,26 @@
+{
+  "name": "zwave-alarm-ha-integration",
+  "version": "1.0.0",
+  "description": "Self-hosted Z-Wave alarm system with Home Assistant integration",
+  "main": "dist/index.js",
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@types/better-sqlite3": "^9.6.0",
+    "@types/express": "^4.17.25",
+    "@types/node": "^26.5.0",
+    "@types/ws": "^8.18.1",
+    "@zwave-js/server": "^3.10.1",
+    "better-sqlite3": "^13.0.3",
+    "express": "^4.22.2",
+    "typescript": "^7.0.2",
+    "ws": "^8.21.3",
+    "zwave-js": "^15.28.0"
+  }
+}
