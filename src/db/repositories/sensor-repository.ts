@@ -128,6 +128,12 @@ export class SensorRepository extends Repository {
     return next;
   }
 
+  /** Looks up the sensor assigned to a given zwave-js node, if any (T024's sensor-mapper resolves nodes this way). */
+  findByNodeId(zwaveNodeId: number): SensorDevice | undefined {
+    const row = this.get<SensorDeviceRow>('SELECT * FROM sensor_devices WHERE zwave_node_id = ?', zwaveNodeId);
+    return row ? toDomain(row) : undefined;
+  }
+
   listByZone(zoneId: string): SensorDevice[] {
     return this.all<SensorDeviceRow>(
       'SELECT * FROM sensor_devices WHERE zone_id = ? ORDER BY updated_at ASC',
