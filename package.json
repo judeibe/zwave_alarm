@@ -5,7 +5,7 @@
   "main": "dist/index.js",
   "type": "module",
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && mkdir -p dist/web && cp src/web/index.html src/web/app.js src/web/styles.css dist/web/",
     "start": "node dist/index.js",
     "lint": "eslint .",
     "test": "vitest run",

@@ -97,4 +97,46 @@ describe('createApp', () => {
     expect(res.status).toBe(400);
     expect(res.body.error.code).toBe('bad_request');
   });
+
+  describe('static dashboard (T030)', () => {
+    it('serves the dashboard index.html at /', async () => {
+      const { createApp } = await loadApp();
+      const app = createApp();
+
+      const res = await request(app).get('/');
+
+      expect(res.status).toBe(200);
+      expect(res.headers['content-type']).toContain('text/html');
+      expect(res.text).toContain('<title>Z-Wave Alarm</title>');
+    });
+
+    it('serves app.js with a JavaScript content type', async () => {
+      const { createApp } = await loadApp();
+      const app = createApp();
+
+      const res = await request(app).get('/app.js');
+
+      expect(res.status).toBe(200);
+      expect(res.headers['content-type']).toContain('javascript');
+    });
+
+    it('serves styles.css', async () => {
+      const { createApp } = await loadApp();
+      const app = createApp();
+
+      const res = await request(app).get('/styles.css');
+
+      expect(res.status).toBe(200);
+      expect(res.headers['content-type']).toContain('text/css');
+    });
+
+    it('falls through to the JSON 404 handler for an unknown static path', async () => {
+      const { createApp } = await loadApp();
+      const app = createApp();
+
+      const res = await request(app).get('/does-not-exist.txt');
+
+      expect(res.status).toBe(404);
+    });
+  });
 });

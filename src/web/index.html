@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Z-Wave Alarm</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <header>
+      <h1>Z-Wave Alarm</h1>
+      <div id="connection-status" class="pill" data-state="disconnected">disconnected</div>
+    </header>
+
+    <main>
+      <section id="login-section">
+        <h2>Sign in</h2>
+        <form id="login-form">
+          <label for="login-code">Code</label>
+          <input id="login-code" name="code" type="password" inputmode="numeric" autocomplete="off" required />
+          <button type="submit">Log in</button>
+        </form>
+        <p id="login-error" class="error" role="alert"></p>
+      </section>
+
+      <section id="dashboard-section" hidden>
+        <div class="dashboard-header">
+          <p>
+            Signed in as <strong id="current-user-name"></strong> (<span id="current-user-role"></span>)
+          </p>
+          <button id="logout-button" type="button">Log out</button>
+        </div>
+
+        <section id="panel-section">
+          <h2>Panel</h2>
+          <p>
+            Mode: <strong id="panel-mode">-</strong>
+            <span id="panel-countdown"></span>
+          </p>
+          <div class="panel-controls">
+            <button id="arm-away-button" type="button">Arm Away</button>
+            <button id="arm-home-button" type="button">Arm Home</button>
+          </div>
+          <form id="disarm-form">
+            <label for="disarm-code">Disarm code</label>
+            <input id="disarm-code" name="code" type="password" inputmode="numeric" autocomplete="off" required />
+            <button type="submit">Disarm</button>
+          </form>
+          <p id="panel-error" class="error" role="alert"></p>
+        </section>
+
+        <section id="zones-section">
+          <h2>Zones &amp; Sensors</h2>
+          <ul id="zone-list"></ul>
+        </section>
+      </section>
+    </main>
+
+    <script src="/app.js"></script>
+  </body>
+</html>

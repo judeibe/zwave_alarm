@@ -1,3 +1,5 @@
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import express, { type Express, type NextFunction, type Request, type Response } from 'express';
 import type { Driver } from 'zwave-js';
 import { sessionMiddleware } from '../auth/session.js';
@@ -29,6 +31,13 @@ export class ApiError extends Error {
     this.code = code;
   }
 }
+
+// Resolves to dist/web at runtime (built) or src/web (tests import this
+// module directly, unbundled) — both sit one directory up from this file's
+// own compiled/source location, so the same relative path works either way.
+// `npm run build`'s "copy-web-assets" step is what puts index.html/app.js/
+// styles.css into dist/web in the first place; tsc alone only compiles .ts.
+const WEB_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', 'web');
 
 interface ErrorResponseBody {
   status: number;
@@ -94,6 +103,13 @@ export function createApp(deps?: AppDeps): Express {
   app.get('/healthz', (_req: Request, res: Response) => {
     res.status(200).json({ status: 'ok' });
   });
+
+  // The minimal bundled dashboard (T030): index.html/app.js/styles.css,
+  // served as plain static files ahead of the /api/v1 mount below so they
+  // never compete with a route path. Unconditional (not gated on `deps`)
+  // since it has no dependency on the services graph — it talks to the API
+  // over fetch()/WebSocket at runtime, same as a Home Assistant client would.
+  app.use(express.static(WEB_DIR));
 
   if (deps) {
     app.use(sessionMiddleware);
