@@ -52,7 +52,7 @@ async function buildHarness(): Promise<{ app: Express; userRepo: UserRepository;
   const driver = mockDriver as unknown as Driver;
 
   const { createApp } = await import('../../src/api/app.js');
-  const app = createApp({ panelService, userRepo, zoneRepo, sensorRepo, lockoutService, driver });
+  const app = createApp({ panelService, userRepo, zoneRepo, sensorRepo, lockoutService, eventRepo, driver });
 
   return { app, userRepo, nodeMap: mockDriver.controller.nodes };
 }

@@ -6,10 +6,12 @@ import type { UserRepository } from '../auth/user-repository.js';
 import type { ZoneRepository } from '../db/repositories/zone-repository.js';
 import type { SensorRepository } from '../db/repositories/sensor-repository.js';
 import type { PanelService } from '../alarm/panel-service.js';
+import type { EventRepository } from '../events/event-repository.js';
 import { createAuthRouter } from './routes/auth-routes.js';
 import { createPanelRouter } from './routes/panel-routes.js';
 import { createZoneRouter } from './routes/zone-routes.js';
 import { createUserRouter } from './routes/user-routes.js';
+import { createEventRouter } from './routes/event-routes.js';
 
 /**
  * Thrown by route handlers to produce the `{ error: { code, message } }`
@@ -69,6 +71,7 @@ export interface AppDeps {
   zoneRepo: ZoneRepository;
   sensorRepo: SensorRepository;
   lockoutService: LockoutService;
+  eventRepo: EventRepository;
   /** Only `controller.nodes` is read (zone-routes.ts validates an assigned zwaveNodeId against it). */
   driver: Pick<Driver, 'controller'>;
 }
@@ -100,12 +103,14 @@ export function createApp(deps?: AppDeps): Express {
       zoneRepo: deps.zoneRepo,
       sensorRepo: deps.sensorRepo,
       lockoutService: deps.lockoutService,
+      eventRepo: deps.eventRepo,
       driver: deps.driver,
     };
     app.use('/api/v1', createAuthRouter(routeDeps));
     app.use('/api/v1', createPanelRouter(routeDeps));
     app.use('/api/v1', createZoneRouter(routeDeps));
     app.use('/api/v1', createUserRouter(routeDeps));
+    app.use('/api/v1', createEventRouter(routeDeps));
   }
 
   // eslint-disable-next-line @typescript-eslint/no-unused-vars -- Express only recognizes error middleware with all four parameters present.

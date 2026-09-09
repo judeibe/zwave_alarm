@@ -45,7 +45,7 @@ const sensorMapper = new SensorMapper(driver, sensorRepo, panelService, eventRep
 driver.once('driver ready', () => sensorMapper.start());
 new Siren(driver, panelService, { nodeId: config.sirenNodeId });
 
-const app = createApp({ panelService, userRepo, zoneRepo, sensorRepo, lockoutService, driver });
+const app = createApp({ panelService, userRepo, zoneRepo, sensorRepo, lockoutService, eventRepo, driver });
 const httpServer = createServer(app);
 
 // Shares the REST API's HTTP server/port, per contracts/websocket-events.md's

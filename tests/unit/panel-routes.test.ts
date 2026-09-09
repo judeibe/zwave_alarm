@@ -55,7 +55,7 @@ async function buildHarness(): Promise<{
   const driver = new MockDriver() as unknown as Driver;
 
   const { createApp } = await import('../../src/api/app.js');
-  const app = createApp({ panelService, userRepo, zoneRepo, sensorRepo, lockoutService, driver });
+  const app = createApp({ panelService, userRepo, zoneRepo, sensorRepo, lockoutService, eventRepo, driver });
 
   // Test-only bypass that establishes a session directly, skipping the real
   // login route's own guest-expiry check -- used to reach panel/disarm's
