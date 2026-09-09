@@ -1,9 +1,44 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
-import { ApiError, createApp, toErrorResponse } from '../../src/api/app.js';
+
+const ENV_KEYS = ['SERIAL_PORT', 'DB_PATH', 'HTTP_PORT', 'ZWAVE_SERVER_PORT', 'SESSION_SECRET'] as const;
+
+function setEnv() {
+  process.env.SERIAL_PORT = '/dev/ttyACM0';
+  process.env.DB_PATH = ':memory:';
+  process.env.HTTP_PORT = '3000';
+  process.env.ZWAVE_SERVER_PORT = '3001';
+  process.env.SESSION_SECRET = 'test-secret';
+}
+
+/**
+ * app.ts (via src/auth/session.ts) now pulls in src/config/index.ts, which
+ * validates required env vars *at import time* — a static top-level import
+ * would run before any beforeEach() gets a chance to set them, so every test
+ * here imports app.ts dynamically after env vars are in place, mirroring
+ * tests/unit/session.test.ts's/tests/unit/config.test.ts's precedent.
+ */
+async function loadApp() {
+  return import('../../src/api/app.js');
+}
 
 describe('createApp', () => {
+  const originalEnv = { ...process.env };
+
+  beforeEach(() => {
+    vi.resetModules();
+    setEnv();
+  });
+
+  afterEach(() => {
+    for (const key of ENV_KEYS) {
+      delete process.env[key];
+    }
+    process.env = { ...originalEnv };
+  });
+
   it('returns 200 OK from /healthz', async () => {
+    const { createApp } = await loadApp();
     const app = createApp();
 
     const res = await request(app).get('/healthz');
@@ -13,6 +48,7 @@ describe('createApp', () => {
   });
 
   it('parses JSON request bodies', async () => {
+    const { createApp } = await loadApp();
     const app = createApp();
     app.post('/echo', (req, res) => {
       res.status(200).json(req.body);
@@ -24,7 +60,8 @@ describe('createApp', () => {
     expect(res.body).toEqual({ hello: 'world' });
   });
 
-  it('maps an ApiError to { status, code, message } from its own fields', () => {
+  it('maps an ApiError to { status, code, message } from its own fields', async () => {
+    const { ApiError, toErrorResponse } = await loadApp();
     const err = new ApiError(409, 'conflict', 'native command already pending');
 
     expect(toErrorResponse(err)).toEqual({
@@ -34,7 +71,8 @@ describe('createApp', () => {
     });
   });
 
-  it('maps an unexpected error to a 500 internal_error', () => {
+  it('maps an unexpected error to a 500 internal_error', async () => {
+    const { toErrorResponse } = await loadApp();
     const err = new Error('unexpected failure');
 
     expect(toErrorResponse(err)).toEqual({
@@ -45,6 +83,7 @@ describe('createApp', () => {
   });
 
   it('formats a malformed JSON body as a 400 bad_request', async () => {
+    const { createApp } = await loadApp();
     const app = createApp();
     app.post('/echo', (req, res) => {
       res.status(200).json(req.body);

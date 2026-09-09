@@ -97,6 +97,19 @@ describe('UserRepository', () => {
     expect(repo.findByCode('0000')).toBeUndefined();
   });
 
+  it('findById returns the matching user', () => {
+    const repo = new UserRepository(createDatabase(':memory:'));
+    const bob = repo.create({ name: 'Bob', role: 'member', code: '2222' });
+
+    expect(repo.findById(bob.id)?.name).toBe('Bob');
+  });
+
+  it('findById returns undefined for an unknown id', () => {
+    const repo = new UserRepository(createDatabase(':memory:'));
+
+    expect(repo.findById('does-not-exist')).toBeUndefined();
+  });
+
   it('list returns all users ordered by createdAt', () => {
     const repo = new UserRepository(createDatabase(':memory:'));
     const alice = repo.create({ name: 'Alice', role: 'administrator', code: '1111' });

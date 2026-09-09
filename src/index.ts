@@ -7,14 +7,45 @@ import { createDatabase } from './db/schema.js';
 import { createApp } from './api/app.js';
 import { createWebSocketServer } from './api/ws.js';
 import { startZwaveJsServer } from './zwave/server.js';
+import { getDriver } from './zwave/driver.js';
+import { AlarmPanelRepository } from './alarm/panel-repository.js';
+import { PanelService } from './alarm/panel-service.js';
+import { Siren } from './alarm/siren.js';
+import { EventRepository } from './events/event-repository.js';
+import { ZoneRepository } from './db/repositories/zone-repository.js';
+import { SensorRepository } from './db/repositories/sensor-repository.js';
+import { SensorMapper } from './zwave/sensor-mapper.js';
+import { UserRepository } from './auth/user-repository.js';
+import { LockoutPolicyRepository } from './auth/lockout-policy-repository.js';
+import { LockoutService } from './auth/lockout-service.js';
 
 const logger = createLogger('index');
 
 // better-sqlite3 requires the parent directory to already exist.
 mkdirSync(dirname(config.dbPath), { recursive: true });
-createDatabase(config.dbPath);
+const db = createDatabase(config.dbPath);
 
-const app = createApp();
+const eventRepo = new EventRepository(db);
+const panelRepo = new AlarmPanelRepository(db);
+const zoneRepo = new ZoneRepository(db);
+const sensorRepo = new SensorRepository(db);
+const userRepo = new UserRepository(db);
+const lockoutPolicyRepo = new LockoutPolicyRepository(db);
+
+const panelService = new PanelService(panelRepo, eventRepo);
+const lockoutService = new LockoutService(userRepo, lockoutPolicyRepo, eventRepo, panelService);
+
+const driver = getDriver();
+// `driver.controller` throws until the driver actually finishes starting
+// (zwave-js's own "not yet ready" guard), so SensorMapper.start() — which
+// reads controller.nodes immediately — has to wait for "driver ready"
+// rather than running right away. Siren only touches controller.nodes
+// lazily inside its panel_changed handler, so it's safe to construct now.
+const sensorMapper = new SensorMapper(driver, sensorRepo, panelService, eventRepo);
+driver.once('driver ready', () => sensorMapper.start());
+new Siren(driver, panelService, { nodeId: config.sirenNodeId });
+
+const app = createApp({ panelService, userRepo, zoneRepo, sensorRepo, lockoutService, driver });
 const httpServer = createServer(app);
 
 // Shares the REST API's HTTP server/port, per contracts/websocket-events.md's

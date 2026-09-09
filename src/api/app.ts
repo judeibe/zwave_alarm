@@ -1,4 +1,15 @@
 import express, { type Express, type NextFunction, type Request, type Response } from 'express';
+import type { Driver } from 'zwave-js';
+import { sessionMiddleware } from '../auth/session.js';
+import type { LockoutService } from '../auth/lockout-service.js';
+import type { UserRepository } from '../auth/user-repository.js';
+import type { ZoneRepository } from '../db/repositories/zone-repository.js';
+import type { SensorRepository } from '../db/repositories/sensor-repository.js';
+import type { PanelService } from '../alarm/panel-service.js';
+import { createAuthRouter } from './routes/auth-routes.js';
+import { createPanelRouter } from './routes/panel-routes.js';
+import { createZoneRouter } from './routes/zone-routes.js';
+import { createUserRouter } from './routes/user-routes.js';
 
 /**
  * Thrown by route handlers to produce the `{ error: { code, message } }`
@@ -51,14 +62,28 @@ export function toErrorResponse(err: unknown): ErrorResponseBody {
   };
 }
 
+/** Wires the REST API surface (contracts/rest-api.md, T027) onto an app when supplied. */
+export interface AppDeps {
+  panelService: PanelService;
+  userRepo: UserRepository;
+  zoneRepo: ZoneRepository;
+  sensorRepo: SensorRepository;
+  lockoutService: LockoutService;
+  /** Only `controller.nodes` is read (zone-routes.ts validates an assigned zwaveNodeId against it). */
+  driver: Pick<Driver, 'controller'>;
+}
+
 /**
- * Builds the Express app skeleton: JSON body parsing, a `/healthz` route,
- * and the catch-all error-handling middleware. Route registration for the
- * actual REST API surface (contracts/rest-api.md) happens in later phases;
- * this module does not call `.listen()` — process bootstrap is out of scope
- * here per T009/T010's precedent.
+ * Builds the Express app: JSON body parsing, a `/healthz` route, and the
+ * catch-all error-handling middleware — always present. When `deps` is
+ * supplied, also mounts the session middleware (src/auth/session.ts) and the
+ * full `/api/v1` REST surface (T027) wired to the given
+ * services/repositories; `deps` is optional so this module stays testable in
+ * isolation (as tests/unit/app.test.ts already does) without constructing a
+ * real database/driver/services graph. This module still does not call
+ * `.listen()` — process bootstrap (src/index.ts) owns that.
  */
-export function createApp(): Express {
+export function createApp(deps?: AppDeps): Express {
   const app = express();
 
   app.use(express.json());
@@ -66,6 +91,22 @@ export function createApp(): Express {
   app.get('/healthz', (_req: Request, res: Response) => {
     res.status(200).json({ status: 'ok' });
   });
+
+  if (deps) {
+    app.use(sessionMiddleware);
+    const routeDeps = {
+      panelService: deps.panelService,
+      userRepo: deps.userRepo,
+      zoneRepo: deps.zoneRepo,
+      sensorRepo: deps.sensorRepo,
+      lockoutService: deps.lockoutService,
+      driver: deps.driver,
+    };
+    app.use('/api/v1', createAuthRouter(routeDeps));
+    app.use('/api/v1', createPanelRouter(routeDeps));
+    app.use('/api/v1', createZoneRouter(routeDeps));
+    app.use('/api/v1', createUserRouter(routeDeps));
+  }
 
   // eslint-disable-next-line @typescript-eslint/no-unused-vars -- Express only recognizes error middleware with all four parameters present.
   app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {

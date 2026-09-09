@@ -137,6 +137,12 @@ export class UserRepository extends Repository {
     return this.all<UserRow>('SELECT * FROM users ORDER BY created_at ASC').map(toDomain);
   }
 
+  /** Looks up a single user by id (T027's routes resolve the session/HA-token caller this way). */
+  findById(id: string): User | undefined {
+    const row = this.get<UserRow>('SELECT * FROM users WHERE id = ?', id);
+    return row ? toDomain(row) : undefined;
+  }
+
   delete(id: string): void {
     this.run('DELETE FROM users WHERE id = ?', id);
   }
