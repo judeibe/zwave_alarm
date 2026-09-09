@@ -2,6 +2,7 @@ import session from 'express-session';
 import type { NextFunction, Request, RequestHandler, Response } from 'express';
 import { config } from '../config/index.js';
 import { ApiError } from '../api/app.js';
+import type { UserRole } from './user-repository.js';
 
 /**
  * Login (Phase 02, T027) sets these on `req.session` after validating a
@@ -12,7 +13,7 @@ import { ApiError } from '../api/app.js';
 declare module 'express-session' {
   interface SessionData {
     userId: string;
-    role: 'administrator' | 'member' | 'guest';
+    role: UserRole;
   }
 }
 
