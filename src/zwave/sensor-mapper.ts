@@ -1,3 +1,4 @@
+import { EventEmitter } from 'node:events';
 import type {
   Driver,
   ZWaveNode,
@@ -35,8 +36,17 @@ export interface SensorMapperOptions {
  * Only nodes with a matching `sensor_devices` row (by zwaveNodeId) are acted
  * on. Assigning a node to a zone/category is T027's route, not this
  * module's concern — an unmapped node's events are ignored.
+ *
+ * Emits `'sensor_changed'` (the updated SensorDevice) on every breach/normal
+ * transition and `'sensor_fault'` (the updated SensorDevice) on every
+ * connectivity or battery-level change, so `src/api/ws-broadcaster.ts` (T029)
+ * can push `sensor.changed`/`sensor.fault` to WebSocket clients. Fault events
+ * fire on both the ok->fault and fault->ok edges (unlike the device_fault
+ * SecurityEvent recorded by recordFault(), which only fires on the
+ * ok->fault edge) so the dashboard's live fault indicators (T030) clear
+ * again once a sensor recovers.
  */
-export class SensorMapper {
+export class SensorMapper extends EventEmitter {
   private readonly lowBatteryThresholdPercent: number;
   private readonly attachedNodeIds = new Set<number>();
 
@@ -47,6 +57,7 @@ export class SensorMapper {
     private readonly eventRepo: EventRepository,
     options: SensorMapperOptions = {},
   ) {
+    super();
     this.lowBatteryThresholdPercent = options.lowBatteryThresholdPercent ?? DEFAULT_LOW_BATTERY_THRESHOLD_PERCENT;
   }
 
@@ -114,6 +125,7 @@ export class SensorMapper {
     }
 
     const updated = this.sensorRepo.updateState(sensor.id, { connectivityStatus: status });
+    this.emit('sensor_fault', updated);
     if (status === 'offline') {
       this.recordFault(updated, 'connectivity lost');
     }
@@ -127,6 +139,7 @@ export class SensorMapper {
     }
 
     const updated = this.sensorRepo.updateState(sensor.id, { currentState: nextState });
+    this.emit('sensor_changed', updated);
     if (nextState === 'breached') {
       this.panelService.reportSensorBreach({ id: updated.id, zoneId: updated.zoneId, category: updated.category });
     }
@@ -142,6 +155,7 @@ export class SensorMapper {
     const isLow = level !== null && level <= this.lowBatteryThresholdPercent;
 
     const updated = this.sensorRepo.updateState(sensor.id, { batteryLevel: level });
+    this.emit('sensor_fault', updated);
     if (isLow && !wasLow) {
       this.recordFault(updated, `battery at ${String(level)}%`);
     }

@@ -6,6 +6,7 @@ import { createLogger } from './config/logger.js';
 import { createDatabase } from './db/schema.js';
 import { createApp } from './api/app.js';
 import { createWebSocketServer } from './api/ws.js';
+import { attachWsBroadcaster, buildLiveSnapshot } from './api/ws-broadcaster.js';
 import { startZwaveJsServer } from './zwave/server.js';
 import { getDriver } from './zwave/driver.js';
 import { AlarmPanelRepository } from './alarm/panel-repository.js';
@@ -50,7 +51,10 @@ const httpServer = createServer(app);
 
 // Shares the REST API's HTTP server/port, per contracts/websocket-events.md's
 // `wss://<host>/api/v1/stream` endpoint.
-createWebSocketServer({ server: httpServer, path: '/api/v1/stream' });
+const wss = createWebSocketServer({ server: httpServer, path: '/api/v1/stream' }, () =>
+  buildLiveSnapshot({ panelService, zoneRepo }),
+);
+attachWsBroadcaster(wss, { panelService, sensorMapper, eventRepo, zoneRepo });
 
 httpServer.listen(config.httpPort, () => {
   logger.info('HTTP/WebSocket server listening', {

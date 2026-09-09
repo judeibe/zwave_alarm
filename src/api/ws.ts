@@ -1,12 +1,12 @@
 import { WebSocketServer, type ServerOptions, type WebSocket } from 'ws';
 
 /**
- * Stub `snapshot` payload shape from contracts/websocket-events.md. Real
- * panel/zone state isn't wired up until later phases (T029 feeds this same
- * shape from live repositories via src/api/ws-broadcaster.ts) — this
- * skeleton only guarantees a `snapshot` is sent immediately on connect.
+ * Stub `snapshot` payload shape from contracts/websocket-events.md, used when
+ * no real `buildSnapshot` is supplied (e.g. `tests/unit/ws.test.ts`
+ * exercising just the protocol skeleton). `src/api/ws-broadcaster.ts` (T029)
+ * supplies the real one, built from live panel/zone state.
  */
-function buildSnapshot(): Record<string, unknown> {
+function stubSnapshot(): Record<string, unknown> {
   return {
     type: 'snapshot',
     panel: { mode: 'disarmed', pendingDelayEndsAt: null },
@@ -35,7 +35,7 @@ function isPingMessage(value: unknown): boolean {
  * explicitly out of scope here — that's T034, once real state exists to
  * resync from.
  */
-export function registerConnectionHandlers(wss: WebSocketServer): void {
+export function registerConnectionHandlers(wss: WebSocketServer, buildSnapshot: () => Record<string, unknown> = stubSnapshot): void {
   wss.on('connection', (socket: WebSocket) => {
     socket.send(JSON.stringify(buildSnapshot()));
 
@@ -60,10 +60,15 @@ export function registerConnectionHandlers(wss: WebSocketServer): void {
  * path: '/api/v1/stream' }` to share the REST API's HTTP server, or
  * `{ port }` for standalone use in tests) rather than opening a port
  * itself — attaching this to the actual HTTP server from src/api/app.ts
- * happens in the process bootstrap wiring, out of scope until a later task.
+ * happens in the process bootstrap wiring.
+ *
+ * `buildSnapshot`, when supplied, replaces the stub snapshot with one backed
+ * by live state — `src/api/ws-broadcaster.ts` (T029) is the real caller that
+ * supplies it from `PanelService`/`ZoneRepository`; tests exercising just the
+ * protocol skeleton can omit it.
  */
-export function createWebSocketServer(options: ServerOptions): WebSocketServer {
+export function createWebSocketServer(options: ServerOptions, buildSnapshot?: () => Record<string, unknown>): WebSocketServer {
   const wss = new WebSocketServer(options);
-  registerConnectionHandlers(wss);
+  registerConnectionHandlers(wss, buildSnapshot);
   return wss;
 }

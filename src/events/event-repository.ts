@@ -65,7 +65,15 @@ function toDomain(row: SecurityEventRow): SecurityEvent {
   };
 }
 
-/** Repository for the `security_events` table (data-model.md's SecurityEvent entity). Append-only: no update/delete. */
+/**
+ * Repository for the `security_events` table (data-model.md's SecurityEvent
+ * entity). Append-only: no update/delete.
+ *
+ * Emits `'event_recorded'` (the new SecurityEvent) on every `record()` call
+ * so `src/api/ws-broadcaster.ts` (T029) can push `event.recorded` to
+ * WebSocket clients without every caller (PanelService, SensorMapper,
+ * LockoutService, routes) needing to broadcast it themselves.
+ */
 export class EventRepository extends Repository {
   constructor(db: Database.Database) {
     super(db);
@@ -96,7 +104,14 @@ export class EventRepository extends Repository {
       event.details,
       event.occurredAt,
     );
+    this.emit('event_recorded', event);
     return event;
+  }
+
+  /** Looks up a single SecurityEvent by id (e.g. resolving AlarmPanel.triggeredBy's related zone/sensor). */
+  findById(id: string): SecurityEvent | undefined {
+    const row = this.get<SecurityEventRow>('SELECT * FROM security_events WHERE id = ?', id);
+    return row ? toDomain(row) : undefined;
   }
 
   /** Returns events newest-first, optionally filtered to `occurredAt >= since` and capped at `limit` rows. */
