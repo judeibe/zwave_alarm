@@ -38,6 +38,7 @@ describe('config loader', () => {
 
   it('loads a valid configuration from process.env', async () => {
     setEnv();
+    delete process.env.SIREN_NODE_ID;
     const { config } = await import('../../src/config/index.js');
     expect(config).toEqual({
       serialPort: '/dev/ttyACM0',
@@ -45,7 +46,22 @@ describe('config loader', () => {
       httpPort: 3000,
       zwaveServerPort: 3001,
       sessionSecret: 'test-secret',
+      sirenNodeId: null,
     });
+  });
+
+  it('parses SIREN_NODE_ID when set, and rejects a non-positive-integer value', async () => {
+    setEnv();
+    process.env.SIREN_NODE_ID = '5';
+    const { config } = await import('../../src/config/index.js');
+    expect(config.sirenNodeId).toBe(5);
+
+    vi.resetModules();
+    setEnv();
+    process.env.SIREN_NODE_ID = '0';
+    await expect(import('../../src/config/index.js')).rejects.toThrow(/SIREN_NODE_ID/);
+
+    delete process.env.SIREN_NODE_ID;
   });
 
   it('throws listing every missing variable when several are unset', async () => {

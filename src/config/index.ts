@@ -4,6 +4,8 @@ export interface AppConfig {
   httpPort: number;
   zwaveServerPort: number;
   sessionSecret: string;
+  /** Z-Wave node id of the configured siren/alert device (FR-013). Null until an installer sets it. */
+  sirenNodeId: number | null;
 }
 
 export class ConfigError extends Error {}
@@ -29,6 +31,14 @@ function parsePort(name: string, value: string): number {
   return port;
 }
 
+function parseSirenNodeId(value: string): number {
+  const nodeId = Number(value);
+  if (!Number.isInteger(nodeId) || nodeId <= 0) {
+    throw new ConfigError(`SIREN_NODE_ID must be a positive integer, got "${value}"`);
+  }
+  return nodeId;
+}
+
 function loadConfig(): AppConfig {
   const missing = REQUIRED_VARS.filter((name) => readEnv(name) === undefined);
   if (missing.length > 0) {
@@ -45,12 +55,20 @@ function loadConfig(): AppConfig {
     );
   }
 
+  // Optional: unlike REQUIRED_VARS, a fresh install has no siren device paired yet (it's assigned
+  // post-setup), so this is read directly from process.env rather than going through readEnv()'s
+  // required-var machinery.
+  const rawSirenNodeId = process.env.SIREN_NODE_ID;
+  const sirenNodeId =
+    rawSirenNodeId === undefined || rawSirenNodeId === '' ? null : parseSirenNodeId(rawSirenNodeId);
+
   return {
     serialPort: readEnv('SERIAL_PORT')!,
     dbPath: readEnv('DB_PATH')!,
     httpPort,
     zwaveServerPort,
     sessionSecret: readEnv('SESSION_SECRET')!,
+    sirenNodeId,
   };
 }
 

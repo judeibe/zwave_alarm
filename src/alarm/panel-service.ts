@@ -1,5 +1,6 @@
+import { EventEmitter } from 'node:events';
 import { AlarmCommandDispatcher, type AlarmCommandRequest, type CommandSource } from './dispatcher.js';
-import { AlarmPanelRepository, type AlarmMode, type AlarmPanel } from './panel-repository.js';
+import { AlarmPanelRepository, type AlarmMode, type AlarmPanel, type AlarmPanelUpdate } from './panel-repository.js';
 import { EventRepository } from '../events/event-repository.js';
 import type { SensorDevice } from '../db/repositories/sensor-repository.js';
 
@@ -48,8 +49,13 @@ type PanelCommand = 'arm_away' | 'arm_home' | 'disarm';
  * completion in a single tick before anything else gets a turn. That's what
  * lets completeArming()/completeEntryDelay() safely re-check the current mode
  * before acting instead of needing an explicit lock.
+ *
+ * Every committed state change emits a `'panel_changed'` event (current
+ * AlarmPanel snapshot) so other modules can react without polling — e.g.
+ * `src/alarm/siren.ts` (T026) turning the siren on/off around
+ * `alarm_triggered`.
  */
-export class PanelService {
+export class PanelService extends EventEmitter {
   private readonly dispatcher: AlarmCommandDispatcher;
   private readonly commandContext = new WeakMap<AlarmCommandRequest, CommandContext>();
   private readonly exitDelayMs: number;
@@ -61,6 +67,7 @@ export class PanelService {
     private readonly eventRepo: EventRepository,
     options: { exitDelayMs?: number; entryDelayMs?: number; dispatcherWindowMs?: number } = {},
   ) {
+    super();
     this.exitDelayMs = options.exitDelayMs ?? DEFAULT_EXIT_DELAY_MS;
     this.entryDelayMs = options.entryDelayMs ?? DEFAULT_ENTRY_DELAY_MS;
     this.dispatcher = new AlarmCommandDispatcher((command) => this.handleCommand(command), {
@@ -104,7 +111,7 @@ export class PanelService {
       relatedSensorId: context.relatedSensorId ?? null,
       details: context.details ?? null,
     });
-    return this.panelRepo.updatePanel({ mode: 'alarm_triggered', pendingDelayEndsAt: null, triggeredBy: event.id });
+    return this.commitPanel({ mode: 'alarm_triggered', pendingDelayEndsAt: null, triggeredBy: event.id });
   }
 
   /** Cancels any in-flight exit/entry-delay timer without changing state — for graceful shutdown/test teardown. */
@@ -145,7 +152,7 @@ export class PanelService {
     }
 
     this.clearPendingTimer();
-    const panel = this.panelRepo.updatePanel({
+    const panel = this.commitPanel({
       mode: 'arming',
       pendingDelayEndsAt: Date.now() + this.exitDelayMs,
       triggeredBy: null,
@@ -162,7 +169,7 @@ export class PanelService {
       return; // Superseded by a disarm during the exit delay.
     }
 
-    this.panelRepo.updatePanel({ mode: targetMode, pendingDelayEndsAt: null });
+    this.commitPanel({ mode: targetMode, pendingDelayEndsAt: null });
     this.eventRepo.record({
       type: 'armed',
       source: context.source === 'home_assistant' ? 'home_assistant' : 'user',
@@ -178,7 +185,7 @@ export class PanelService {
 
     this.clearPendingTimer();
     const wasAlarm = current.mode === 'alarm_pending' || current.mode === 'alarm_triggered';
-    const panel = this.panelRepo.updatePanel({ mode: 'disarmed', pendingDelayEndsAt: null, triggeredBy: null });
+    const panel = this.commitPanel({ mode: 'disarmed', pendingDelayEndsAt: null, triggeredBy: null });
     this.eventRepo.record({
       type: wasAlarm ? 'alarm_cleared' : 'disarmed',
       source: context.source === 'home_assistant' ? 'home_assistant' : 'user',
@@ -200,7 +207,7 @@ export class PanelService {
       relatedZoneId: sensor.zoneId,
       relatedSensorId: sensor.id,
     });
-    const panel = this.panelRepo.updatePanel({
+    const panel = this.commitPanel({
       mode: 'alarm_pending',
       pendingDelayEndsAt: Date.now() + this.entryDelayMs,
       triggeredBy: breachEvent.id,
@@ -217,13 +224,14 @@ export class PanelService {
       return; // Disarmed during the entry delay.
     }
 
-    const event = this.eventRepo.record({
-      type: 'alarm_triggered',
-      source: 'system',
-      relatedZoneId: sensor.zoneId,
-      relatedSensorId: sensor.id,
-    });
-    this.panelRepo.updatePanel({ mode: 'alarm_triggered', pendingDelayEndsAt: null, triggeredBy: event.id });
+    this.triggerAlarm({ relatedZoneId: sensor.zoneId, relatedSensorId: sensor.id });
+  }
+
+  /** Persists a panel update and emits 'panel_changed' with the resulting snapshot (e.g. for T026's siren). */
+  private commitPanel(changes: AlarmPanelUpdate): AlarmPanel {
+    const panel = this.panelRepo.updatePanel(changes);
+    this.emit('panel_changed', panel);
+    return panel;
   }
 
   private clearPendingTimer(): void {
