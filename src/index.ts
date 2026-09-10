@@ -19,6 +19,7 @@ import { SensorMapper } from './zwave/sensor-mapper.js';
 import { UserRepository } from './auth/user-repository.js';
 import { LockoutPolicyRepository } from './auth/lockout-policy-repository.js';
 import { LockoutService } from './auth/lockout-service.js';
+import { HaLinkRepository } from './db/repositories/ha-link-repository.js';
 
 const logger = createLogger('index');
 
@@ -32,6 +33,7 @@ const zoneRepo = new ZoneRepository(db);
 const sensorRepo = new SensorRepository(db);
 const userRepo = new UserRepository(db);
 const lockoutPolicyRepo = new LockoutPolicyRepository(db);
+const haLinkRepo = new HaLinkRepository(db);
 
 const panelService = new PanelService(panelRepo, eventRepo);
 const lockoutService = new LockoutService(userRepo, lockoutPolicyRepo, eventRepo, panelService);
@@ -46,7 +48,7 @@ const sensorMapper = new SensorMapper(driver, sensorRepo, panelService, eventRep
 driver.once('driver ready', () => sensorMapper.start());
 new Siren(driver, panelService, { nodeId: config.sirenNodeId });
 
-const app = createApp({ panelService, userRepo, zoneRepo, sensorRepo, lockoutService, eventRepo, driver });
+const app = createApp({ panelService, userRepo, zoneRepo, sensorRepo, lockoutService, eventRepo, haLinkRepo, driver });
 const httpServer = createServer(app);
 
 // Shares the REST API's HTTP server/port, per contracts/websocket-events.md's

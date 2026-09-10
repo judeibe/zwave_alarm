@@ -20,7 +20,7 @@ function setEnv() {
  * tests/unit/session.test.ts's/tests/unit/config.test.ts's precedent.
  */
 async function buildTestApp() {
-  const { hashToken, requireHaToken } = await import('../../src/auth/token.js');
+  const { hashToken, requireHaToken, configureHaLinkAuth } = await import('../../src/auth/token.js');
   const { toErrorResponse } = await import('../../src/api/app.js');
 
   const app = express();
@@ -35,7 +35,7 @@ async function buildTestApp() {
     res.status(status).json({ error: { code, message } });
   });
 
-  return { app, hashToken };
+  return { app, hashToken, configureHaLinkAuth };
 }
 
 describe('bearer-token auth middleware', () => {
@@ -82,7 +82,7 @@ describe('bearer-token auth middleware', () => {
     expect(res.body.error.code).toBe('unauthorized');
   });
 
-  it('rejects a well-formed but unknown token as 401 (stub lookup always misses)', async () => {
+  it('rejects a well-formed but unknown token as 401 when no lookup has been configured', async () => {
     const { app } = await buildTestApp();
 
     const res = await request(app).get('/protected').set('Authorization', 'Bearer some-ha-token');
@@ -91,6 +91,29 @@ describe('bearer-token auth middleware', () => {
     expect(res.body).toEqual({
       error: { code: 'unauthorized', message: 'Invalid or unknown Home Assistant token.' },
     });
+  });
+
+  it('rejects a well-formed token that the configured lookup does not recognize', async () => {
+    const { app, configureHaLinkAuth } = await buildTestApp();
+    configureHaLinkAuth({ findByTokenHash: () => undefined });
+
+    const res = await request(app).get('/protected').set('Authorization', 'Bearer some-ha-token');
+
+    expect(res.status).toBe(401);
+    expect(res.body.error.code).toBe('unauthorized');
+  });
+
+  it("resolves a token the configured lookup (T031's HaLinkRepository) recognizes and attaches req.haLink", async () => {
+    const { app, hashToken, configureHaLinkAuth } = await buildTestApp();
+    const link = { id: 'link-1', userId: 'user-1', label: 'Living Room HA' };
+    configureHaLinkAuth({
+      findByTokenHash: (apiTokenHash) => (apiTokenHash === hashToken('real-token') ? link : undefined),
+    });
+
+    const res = await request(app).get('/protected').set('Authorization', 'Bearer real-token');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ haLink: link });
   });
 
   it('hashToken produces a stable, hex-encoded SHA-256 digest', async () => {

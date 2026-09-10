@@ -9,11 +9,14 @@ import type { ZoneRepository } from '../db/repositories/zone-repository.js';
 import type { SensorRepository } from '../db/repositories/sensor-repository.js';
 import type { PanelService } from '../alarm/panel-service.js';
 import type { EventRepository } from '../events/event-repository.js';
+import type { HaLinkRepository } from '../db/repositories/ha-link-repository.js';
+import { configureHaLinkAuth } from '../auth/token.js';
 import { createAuthRouter } from './routes/auth-routes.js';
 import { createPanelRouter } from './routes/panel-routes.js';
 import { createZoneRouter } from './routes/zone-routes.js';
 import { createUserRouter } from './routes/user-routes.js';
 import { createEventRouter } from './routes/event-routes.js';
+import { createHaLinkRouter } from './routes/ha-link-routes.js';
 
 /**
  * Thrown by route handlers to produce the `{ error: { code, message } }`
@@ -81,6 +84,7 @@ export interface AppDeps {
   sensorRepo: SensorRepository;
   lockoutService: LockoutService;
   eventRepo: EventRepository;
+  haLinkRepo: HaLinkRepository;
   /** Only `controller.nodes` is read (zone-routes.ts validates an assigned zwaveNodeId against it). */
   driver: Pick<Driver, 'controller'>;
 }
@@ -112,6 +116,11 @@ export function createApp(deps?: AppDeps): Express {
   app.use(express.static(WEB_DIR));
 
   if (deps) {
+    // Wires T031's HaLinkRepository into requireHaToken (src/auth/token.ts),
+    // replacing Phase 01's always-reject stub, so both this mount's
+    // requireAuth calls and ha-link-routes.ts's own resolve real tokens.
+    configureHaLinkAuth(deps.haLinkRepo);
+
     app.use(sessionMiddleware);
     const routeDeps = {
       panelService: deps.panelService,
@@ -120,6 +129,7 @@ export function createApp(deps?: AppDeps): Express {
       sensorRepo: deps.sensorRepo,
       lockoutService: deps.lockoutService,
       eventRepo: deps.eventRepo,
+      haLinkRepo: deps.haLinkRepo,
       driver: deps.driver,
     };
     app.use('/api/v1', createAuthRouter(routeDeps));
@@ -127,6 +137,7 @@ export function createApp(deps?: AppDeps): Express {
     app.use('/api/v1', createZoneRouter(routeDeps));
     app.use('/api/v1', createUserRouter(routeDeps));
     app.use('/api/v1', createEventRouter(routeDeps));
+    app.use('/api/v1', createHaLinkRouter(routeDeps));
   }
 
   // eslint-disable-next-line @typescript-eslint/no-unused-vars -- Express only recognizes error middleware with all four parameters present.

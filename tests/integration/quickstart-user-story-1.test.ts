@@ -109,6 +109,7 @@ function buildHarness() {
   new Siren(driver, panelService, { nodeId: 99 });
 
   return {
+    db,
     eventRepo,
     zoneRepo,
     sensorRepo,
@@ -125,6 +126,13 @@ function buildHarness() {
 
 async function buildApp(harness: ReturnType<typeof buildHarness>): Promise<Express> {
   const { createApp } = await import('../../src/api/app.js');
+  // Dynamically imported alongside createApp: HaLinkRepository transitively
+  // imports src/auth/token.js -> src/api/app.js -> src/auth/session.js ->
+  // src/config/index.js, which validates required env vars at import time
+  // (setEnv() in beforeEach runs before this, but not before a static
+  // top-level import would resolve) -- same reasoning as tests/unit/token.test.ts.
+  const { HaLinkRepository } = await import('../../src/db/repositories/ha-link-repository.js');
+  const haLinkRepo = new HaLinkRepository(harness.db);
   return createApp({
     panelService: harness.panelService,
     userRepo: harness.userRepo,
@@ -132,6 +140,7 @@ async function buildApp(harness: ReturnType<typeof buildHarness>): Promise<Expre
     sensorRepo: harness.sensorRepo,
     lockoutService: harness.lockoutService,
     eventRepo: harness.eventRepo,
+    haLinkRepo,
     driver: harness.driver,
   });
 }

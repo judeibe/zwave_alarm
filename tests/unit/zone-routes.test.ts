@@ -51,8 +51,13 @@ async function buildHarness(): Promise<{ app: Express; userRepo: UserRepository;
   const mockDriver = new MockDriver();
   const driver = mockDriver as unknown as Driver;
 
+  // Dynamically imported alongside createApp: HaLinkRepository transitively
+  // imports src/auth/token.js -> src/api/app.js -> src/auth/session.js ->
+  // src/config/index.js, which validates required env vars at import time.
   const { createApp } = await import('../../src/api/app.js');
-  const app = createApp({ panelService, userRepo, zoneRepo, sensorRepo, lockoutService, eventRepo, driver });
+  const { HaLinkRepository } = await import('../../src/db/repositories/ha-link-repository.js');
+  const haLinkRepo = new HaLinkRepository(db);
+  const app = createApp({ panelService, userRepo, zoneRepo, sensorRepo, lockoutService, eventRepo, haLinkRepo, driver });
 
   return { app, userRepo, nodeMap: mockDriver.controller.nodes };
 }

@@ -26,16 +26,27 @@ export function hashToken(token: string): string {
   return createHash('sha256').update(token).digest('hex');
 }
 
+/** The slice of `HaLinkRepository` (T031, src/db/repositories/ha-link-repository.ts) that `requireHaToken` needs. */
+export interface HaLinkLookup {
+  findByTokenHash(apiTokenHash: string): { id: string; userId: string; label: string } | undefined;
+}
+
 /**
- * TODO(Phase 03): replace with a real lookup against the `ha_links` table
- * (src/db/schema.ts) once its repository exists — match on `api_token_hash`,
- * update `last_seen_at`, and treat a `connection_status: 'disconnected'` row
- * as invalid too. Until then every token is unrecognized, so `requireHaToken`
- * always rejects — this is intentional per T014's scope (middleware only).
+ * Set once at app bootstrap (src/api/app.ts's `createApp`, given a real
+ * `HaLinkRepository`) so `requireHaToken` below can resolve real tokens.
+ * Left `undefined` in isolated tests of this module that only exercise the
+ * header-parsing path (tests/unit/token.test.ts) — every token is then
+ * unrecognized, same as this module's original pre-Phase-03 stub.
  */
-// eslint-disable-next-line @typescript-eslint/no-unused-vars -- signature documents the real lookup's shape; the stub ignores its argument.
-function lookupHaLinkByTokenHash(_tokenHash: string): HaLink | undefined {
-  return undefined;
+let haLinkLookup: HaLinkLookup | undefined;
+
+/** Wires a real `ha_links` lookup into `requireHaToken` (replaces the Phase 01 stub, T032). */
+export function configureHaLinkAuth(lookup: HaLinkLookup): void {
+  haLinkLookup = lookup;
+}
+
+function lookupHaLinkByTokenHash(tokenHash: string): HaLink | undefined {
+  return haLinkLookup?.findByTokenHash(tokenHash);
 }
 
 function extractBearerToken(header: string | undefined): string | undefined {
