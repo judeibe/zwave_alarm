@@ -3,6 +3,9 @@ export interface AppConfig {
   dbPath: string;
   httpPort: number;
   zwaveServerPort: number;
+  /** Host/interface zwave-js-server binds to (T033). Defaults to all interfaces so the Home
+   *  Assistant instance can reach it over the local network per spec.md's Assumptions. */
+  zwaveServerHost: string;
   sessionSecret: string;
   /** Z-Wave node id of the configured siren/alert device (FR-013). Null until an installer sets it. */
   sirenNodeId: number | null;
@@ -62,11 +65,18 @@ function loadConfig(): AppConfig {
   const sirenNodeId =
     rawSirenNodeId === undefined || rawSirenNodeId === '' ? null : parseSirenNodeId(rawSirenNodeId);
 
+  // Optional, same pattern as SIREN_NODE_ID: defaults to 0.0.0.0 (all interfaces) rather than
+  // being required, since most installs don't need to restrict the binding interface.
+  const rawZwaveServerHost = process.env.ZWAVE_SERVER_HOST;
+  const zwaveServerHost =
+    rawZwaveServerHost === undefined || rawZwaveServerHost === '' ? '0.0.0.0' : rawZwaveServerHost;
+
   return {
     serialPort: readEnv('SERIAL_PORT')!,
     dbPath: readEnv('DB_PATH')!,
     httpPort,
     zwaveServerPort,
+    zwaveServerHost,
     sessionSecret: readEnv('SESSION_SECRET')!,
     sirenNodeId,
   };

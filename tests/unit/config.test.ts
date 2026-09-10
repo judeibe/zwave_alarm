@@ -39,15 +39,25 @@ describe('config loader', () => {
   it('loads a valid configuration from process.env', async () => {
     setEnv();
     delete process.env.SIREN_NODE_ID;
+    delete process.env.ZWAVE_SERVER_HOST;
     const { config } = await import('../../src/config/index.js');
     expect(config).toEqual({
       serialPort: '/dev/ttyACM0',
       dbPath: './data/alarm.db',
       httpPort: 3000,
       zwaveServerPort: 3001,
+      zwaveServerHost: '0.0.0.0',
       sessionSecret: 'test-secret',
       sirenNodeId: null,
     });
+  });
+
+  it('uses ZWAVE_SERVER_HOST when set', async () => {
+    setEnv();
+    process.env.ZWAVE_SERVER_HOST = '192.168.1.10';
+    const { config } = await import('../../src/config/index.js');
+    expect(config.zwaveServerHost).toBe('192.168.1.10');
+    delete process.env.ZWAVE_SERVER_HOST;
   });
 
   it('parses SIREN_NODE_ID when set, and rejects a non-positive-integer value', async () => {

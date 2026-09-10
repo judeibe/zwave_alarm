@@ -13,10 +13,17 @@ let startPromise: Promise<void> | undefined;
  * not starting it) on first access. It wraps the same `getDriver()` singleton
  * from T009 — this module never constructs its own `Driver` or opens the
  * serial port, preserving FR-005's single-owner guarantee.
+ *
+ * Binds to `config.zwaveServerHost`/`config.zwaveServerPort` (both configurable via
+ * `ZWAVE_SERVER_HOST`/`ZWAVE_SERVER_PORT`). This port must be reachable from the Home Assistant
+ * instance so its built-in "Z-Wave JS" integration can connect directly to it — but per the
+ * Assumptions in spec.md, it does not need to be exposed beyond the local network (no
+ * internet/cloud dependency required for this integration surface).
  */
 export function getZwaveJsServer(): ZwavejsServer {
   if (!server) {
     server = new ZwavejsServer(getDriver(), {
+      host: config.zwaveServerHost,
       port: config.zwaveServerPort,
       logger: {
         error: (message) => logger.error(typeof message === 'string' ? message : message.message),
