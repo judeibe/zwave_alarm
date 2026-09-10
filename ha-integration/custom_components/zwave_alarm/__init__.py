@@ -14,10 +14,10 @@ from homeassistant.core import HomeAssistant
 
 from .const import DOMAIN
 
-# Extended by T037 (binary_sensor) and T038 (sensor) as each platform module
-# is added. Left off the list here since forwarding setup to a platform
-# module that doesn't exist yet would fail at import time.
-PLATFORMS: list[str] = ["alarm_control_panel"]
+# Extended by T038 (sensor) as that platform module is added. Left off the
+# list here since forwarding setup to a platform module that doesn't exist
+# yet would fail at import time.
+PLATFORMS: list[str] = ["alarm_control_panel", "binary_sensor"]
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:

@@ -89,6 +89,27 @@ async def async_arm(
         raise CannotConnect from err
 
 
+async def async_get_zones(
+    session: aiohttp.ClientSession, host: str, port: int, token: str
+) -> list[dict[str, Any]]:
+    """Fetch all zones, each with its joined sensors, via `GET /api/v1/zones`.
+
+    Used by the per-zone `binary_sensor` entities (T037) and the
+    `sensor.zwave_alarm_fault_count` entity (T038), both of which poll this
+    same endpoint until T039's WebSocket coordinator replaces polling.
+    """
+    url = f"http://{host}:{port}/api/v1/zones"
+    headers = {"Authorization": f"Bearer {token}"}
+    try:
+        async with session.get(url, headers=headers, timeout=REQUEST_TIMEOUT) as response:
+            if response.status == 401:
+                raise InvalidAuth
+            response.raise_for_status()
+            return await response.json()
+    except aiohttp.ClientError as err:
+        raise CannotConnect from err
+
+
 async def async_disarm(
     session: aiohttp.ClientSession, host: str, port: int, token: str, code: str
 ) -> dict[str, Any]:

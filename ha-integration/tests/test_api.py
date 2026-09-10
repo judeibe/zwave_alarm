@@ -24,6 +24,7 @@ from api import (  # noqa: E402
     async_arm,
     async_disarm,
     async_get_panel_state,
+    async_get_zones,
     async_validate_connection,
 )
 
@@ -33,6 +34,7 @@ TOKEN = "a-valid-token"
 PANEL_URL = f"http://{HOST}:{PORT}/api/v1/panel"
 ARM_URL = f"http://{HOST}:{PORT}/api/v1/panel/arm"
 DISARM_URL = f"http://{HOST}:{PORT}/api/v1/panel/disarm"
+ZONES_URL = f"http://{HOST}:{PORT}/api/v1/zones"
 
 
 @pytest.mark.asyncio
@@ -120,6 +122,63 @@ async def test_arm_raises_cannot_connect_on_server_error() -> None:
         async with aiohttp.ClientSession() as session:
             with pytest.raises(CannotConnect):
                 await async_arm(session, HOST, PORT, TOKEN, "armed_away")
+
+
+@pytest.mark.asyncio
+async def test_get_zones_returns_zones_on_success() -> None:
+    zones = [
+        {
+            "id": "zone-1",
+            "name": "Front Door",
+            "createdAt": 1234,
+            "sensors": [
+                {
+                    "id": "sensor-1",
+                    "zwaveNodeId": 5,
+                    "zoneId": "zone-1",
+                    "name": "Front Door Contact",
+                    "category": "intrusion",
+                    "currentState": "normal",
+                    "batteryLevel": 90,
+                    "connectivityStatus": "online",
+                    "updatedAt": 1234,
+                }
+            ],
+        }
+    ]
+    with aioresponses() as mocked:
+        mocked.get(ZONES_URL, status=200, payload=zones)
+        async with aiohttp.ClientSession() as session:
+            result = await async_get_zones(session, HOST, PORT, TOKEN)
+
+    assert result == zones
+
+
+@pytest.mark.asyncio
+async def test_get_zones_raises_invalid_auth_on_401() -> None:
+    with aioresponses() as mocked:
+        mocked.get(ZONES_URL, status=401)
+        async with aiohttp.ClientSession() as session:
+            with pytest.raises(InvalidAuth):
+                await async_get_zones(session, HOST, PORT, TOKEN)
+
+
+@pytest.mark.asyncio
+async def test_get_zones_raises_cannot_connect_on_server_error() -> None:
+    with aioresponses() as mocked:
+        mocked.get(ZONES_URL, status=500)
+        async with aiohttp.ClientSession() as session:
+            with pytest.raises(CannotConnect):
+                await async_get_zones(session, HOST, PORT, TOKEN)
+
+
+@pytest.mark.asyncio
+async def test_get_zones_raises_cannot_connect_on_network_failure() -> None:
+    with aioresponses() as mocked:
+        mocked.get(ZONES_URL, exception=aiohttp.ClientConnectionError())
+        async with aiohttp.ClientSession() as session:
+            with pytest.raises(CannotConnect):
+                await async_get_zones(session, HOST, PORT, TOKEN)
 
 
 @pytest.mark.asyncio
