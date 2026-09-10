@@ -217,6 +217,41 @@ describe('ws-broadcaster', () => {
     });
   });
 
+  it('resyncs a reconnecting client with a fresh snapshot reflecting changes missed while disconnected', async () => {
+    const harness = buildHarness();
+    const nextMessage = await connect(harness);
+    await nextMessage(0); // discard the initial snapshot
+
+    // Simulate a dropped connection (e.g. Home Assistant losing network) by closing
+    // the client outright, then changing state on the server while nobody is listening.
+    client?.close();
+    await once(client as WebSocket, 'close');
+
+    harness.node.emit('value updated', { id: 10 }, {
+      commandClass: CommandClasses['Binary Sensor'],
+      commandClassName: 'Binary Sensor',
+      property: 'Any',
+      newValue: true,
+      prevValue: false,
+    });
+    // Give the (now clientless) broadcast a tick to run so it isn't queued for later delivery.
+    await new Promise((resolve) => setTimeout(resolve, 1));
+
+    // Reconnect as a brand-new WebSocket, mirroring what the HA coordinator's
+    // reconnect-with-backoff does after a drop (contracts/websocket-events.md).
+    const { port } = (wss as WebSocketServer).address() as AddressInfo;
+    const reconnected = new WebSocket(`ws://127.0.0.1:${port}`);
+    const reconnectedNextMessage = collectMessages(reconnected);
+    await once(reconnected, 'open');
+
+    const resynced = await reconnectedNextMessage(0);
+    expect(resynced.type).toBe('snapshot');
+    const zones = resynced.zones as Array<{ sensors: Array<{ currentState: string }> }>;
+    expect(zones[0]?.sensors[0]?.currentState).toBe('breached');
+
+    reconnected.close();
+  });
+
   it('broadcasts to every connected client', async () => {
     const harness = buildHarness();
     const firstNextMessage = await connect(harness);

@@ -31,9 +31,21 @@ function isPingMessage(value: unknown): boolean {
  * (all commands go through the REST API per the contract), so there's no
  * other message type to validate against yet.
  *
- * Reconnect/resync semantics (forcing a fresh `snapshot` after a drop) are
- * explicitly out of scope here — that's T034, once real state exists to
- * resync from.
+ * Reconnect/resync (contracts/websocket-events.md's "resync after
+ * reconnect" requirement, T034): a client reconnecting after a drop opens a
+ * brand-new WebSocket, which is indistinguishable from a first-time
+ * connect — it always lands here and gets a fresh `buildSnapshot()` first.
+ * No buffering/ack handshake is needed to guarantee ordering ahead of
+ * incremental broadcasts (`src/api/ws-broadcaster.ts`): `socket.send` runs
+ * synchronously as the first statement of this handler, and Node's
+ * single-threaded event loop means no other code (including a broadcast
+ * triggered by a concurrent REST call) can run between a client being
+ * accepted and its snapshot being queued on the socket's write stream, which
+ * then preserves call order for everything queued after it. A dropped
+ * client is also removed from `wss.clients` (the `ws` library's own
+ * `close`/error handling), so it never receives incremental events sent
+ * while it was offline — verified by the reconnect test in
+ * tests/unit/ws-broadcaster.test.ts.
  */
 export function registerConnectionHandlers(wss: WebSocketServer, buildSnapshot: () => Record<string, unknown> = stubSnapshot): void {
   wss.on('connection', (socket: WebSocket) => {
