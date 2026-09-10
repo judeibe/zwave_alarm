@@ -1,0 +1,22 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect to Z-Wave Alarm",
+        "description": "Enter the host and port of your Z-Wave Alarm service, and the API token issued via POST /api/v1/ha-links.",
+        "data": {
+          "host": "Host",
+          "port": "Port",
+          "access_token": "API Token"
+        }
+      }
+    },
+    "error": {
+      "invalid_auth": "Invalid API token.",
+      "cannot_connect": "Failed to connect to the Z-Wave Alarm service."
+    },
+    "abort": {
+      "already_configured": "This Z-Wave Alarm service is already configured."
+    }
+  }
+}
