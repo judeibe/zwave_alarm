@@ -6,11 +6,13 @@ standard `alarm_control_panel` states and implements `arm_away`/`arm_home`/
 contracts/ha-custom-component.md's "Entities exposed to Home Assistant"
 section.
 
-This entity polls (`should_poll` defaults to `True`) until T039 adds the
-WebSocket coordinator for push updates (FR-008) and takes over the
-`unavailable`-on-disconnect handling required by the contract's "Failure
-handling" section -- this entity still honors that requirement for now via
-`async_update`, just on a polling cadence rather than pushed events.
+As of T039, this is a `CoordinatorEntity` built on the WebSocket-driven
+`ZwaveAlarmCoordinator` (coordinator.py) rather than a polling entity: state
+comes from `coordinator.data.panel`, and `available` mirrors the
+coordinator's own connectivity (`last_update_success`), so this entity is
+pushed to immediately on `panel.changed` and never reports a stale/assumed
+state -- including `disarmed` -- while the coordinator is disconnected, per
+the contract's "Failure handling" section (FR-006).
 """
 
 from __future__ import annotations
@@ -31,9 +33,12 @@ from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.entity import DeviceInfo
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from . import api
 from .const import DOMAIN
+from .coordinator import ZwaveAlarmCoordinator
+from .coordinator_state import StreamState, merge_panel
 from .panel_state import map_panel_mode
 
 _LOGGER = logging.getLogger(__name__)
@@ -43,10 +48,11 @@ async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
 ) -> None:
     """Set up the alarm_control_panel entity for a config entry."""
-    async_add_entities([ZwaveAlarmControlPanel(hass, entry)])
+    coordinator: ZwaveAlarmCoordinator = hass.data[DOMAIN][entry.entry_id]
+    async_add_entities([ZwaveAlarmControlPanel(coordinator, entry)])
 
 
-class ZwaveAlarmControlPanel(AlarmControlPanelEntity):
+class ZwaveAlarmControlPanel(CoordinatorEntity[ZwaveAlarmCoordinator], AlarmControlPanelEntity):
     """Represents this service's AlarmPanel singleton as an HA alarm_control_panel."""
 
     _attr_has_entity_name = True
@@ -59,8 +65,8 @@ class ZwaveAlarmControlPanel(AlarmControlPanelEntity):
     _attr_code_arm_required = False
     _attr_code_format = CodeFormat.TEXT
 
-    def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
-        self._hass = hass
+    def __init__(self, coordinator: ZwaveAlarmCoordinator, entry: ConfigEntry) -> None:
+        super().__init__(coordinator)
         self._host: str = entry.data[CONF_HOST]
         self._port: int = entry.data[CONF_PORT]
         self._token: str = entry.data[CONF_ACCESS_TOKEN]
@@ -71,21 +77,11 @@ class ZwaveAlarmControlPanel(AlarmControlPanelEntity):
             manufacturer="Z-Wave Alarm",
         )
 
-    async def async_update(self) -> None:
-        """Poll `GET /api/v1/panel` and update state."""
-        session = async_get_clientsession(self._hass)
-        try:
-            panel = await api.async_get_panel_state(session, self._host, self._port, self._token)
-        except (api.CannotConnect, api.InvalidAuth):
-            # Per contracts/ha-custom-component.md's "Failure handling": an
-            # unreachable/unauthorized service must go `unavailable`, never
-            # `disarmed` -- the alarm's own state is authoritative and must
-            # not be inferred from HA's ability to reach it (FR-006).
-            self._attr_available = False
-            return
-
-        self._attr_available = True
-        self._attr_alarm_state = AlarmControlPanelState(map_panel_mode(panel["mode"]))
+    @property
+    def alarm_state(self) -> AlarmControlPanelState | None:
+        """Current alarm state from the coordinator's cached data, or `None` before any snapshot arrives."""
+        panel = self.coordinator.data.panel if self.coordinator.data is not None else None
+        return AlarmControlPanelState(map_panel_mode(panel["mode"])) if panel is not None else None
 
     async def async_alarm_arm_away(self, code: str | None = None) -> None:
         """Arm away via `POST /api/v1/panel/arm`."""
@@ -104,8 +100,14 @@ class ZwaveAlarmControlPanel(AlarmControlPanelEntity):
     async def _async_call(
         self, func: Callable[..., Awaitable[dict[str, Any]]], **kwargs: Any
     ) -> None:
-        """Invoke an api.py arm/disarm call and apply the returned AlarmPanel state."""
-        session = async_get_clientsession(self._hass)
+        """Invoke an api.py arm/disarm call and feed the returned AlarmPanel state into the coordinator.
+
+        Updating the coordinator (rather than just this entity) makes the
+        result visible immediately, without waiting for the WebSocket's own
+        `panel.changed` echo of the same change to arrive and round-trip
+        back through `_handle_message`.
+        """
+        session = async_get_clientsession(self.hass)
         try:
             panel = await func(session, self._host, self._port, self._token, **kwargs)
         except api.InvalidAuth as err:
@@ -123,6 +125,5 @@ class ZwaveAlarmControlPanel(AlarmControlPanelEntity):
         except api.CannotConnect as err:
             raise HomeAssistantError("Could not reach the Z-Wave Alarm service.") from err
 
-        self._attr_available = True
-        self._attr_alarm_state = AlarmControlPanelState(map_panel_mode(panel["mode"]))
-        self.async_write_ha_state()
+        current = self.coordinator.data if self.coordinator.data is not None else StreamState(panel=None, zones=[])
+        self.coordinator.async_set_updated_data(merge_panel(current, panel))
