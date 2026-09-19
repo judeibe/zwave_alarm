@@ -121,7 +121,14 @@ export function createPanelRouter({ panelService, userRepo, lockoutService }: Pa
 
       userRepo.resetFailedAttempts(user.id);
       try {
-        const panel = await panelService.disarm({ source: commandSource(req), sourceUserId: user.id });
+        const source = commandSource(req);
+        const panel = await panelService.disarm({
+          source,
+          sourceUserId: user.id,
+          // FR-013/User Story 3: identity recorded on the alarm_cleared event is "Home Assistant"
+          // for an HA-originated disarm, even though it's still attributable to a linked user.
+          clearedBy: source === 'home_assistant' ? 'Home Assistant' : user.name,
+        });
         res.status(200).json(panel);
       } catch (err) {
         if (err instanceof CommandRejectedError) {

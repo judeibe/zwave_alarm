@@ -39,6 +39,8 @@ async function buildHarness(): Promise<{
   app: Express;
   userRepo: UserRepository;
   lockoutPolicyRepo: LockoutPolicyRepository;
+  eventRepo: EventRepository;
+  panelService: PanelService;
 }> {
   const db = createDatabase(':memory:');
   const panelRepo = new AlarmPanelRepository(db);
@@ -73,7 +75,7 @@ async function buildHarness(): Promise<{
     res.status(200).json({ ok: true });
   });
 
-  return { app, userRepo, lockoutPolicyRepo };
+  return { app, userRepo, lockoutPolicyRepo, eventRepo, panelService };
 }
 
 async function loginAs(app: Express, code: string) {
@@ -186,6 +188,20 @@ describe('panel routes', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.mode).toBe('disarmed');
+  });
+
+  it('records the disarming user\'s name on the alarm_cleared event (User Story 3)', async () => {
+    const { app, userRepo, eventRepo, panelService } = await buildHarness();
+    userRepo.create({ name: 'Owner', role: 'administrator', code: '123456' });
+    const agent = await loginAs(app, '123456');
+    // Force straight into alarm_triggered rather than waiting out the exit/entry delays.
+    panelService.triggerAlarm();
+
+    const res = await agent.post('/api/v1/panel/disarm').send({ code: '123456' });
+
+    expect(res.status).toBe(200);
+    const clearedEvent = eventRepo.list().find((e) => e.type === 'alarm_cleared');
+    expect(clearedEvent?.details).toBe('Cleared by Owner');
   });
 
   it('increments failedAttemptCount on a wrong disarm code without locking below threshold', async () => {

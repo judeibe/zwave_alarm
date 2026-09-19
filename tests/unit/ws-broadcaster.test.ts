@@ -213,7 +213,25 @@ describe('ws-broadcaster', () => {
     const message = await nextMessage(1);
     expect(message).toEqual({
       type: 'event.recorded',
-      event: { id: event.id, type: 'lockout', occurredAt: event.occurredAt },
+      event: { id: event.id, type: 'lockout', occurredAt: event.occurredAt, details: null },
+    });
+  });
+
+  it('includes a non-null details field on event.recorded, e.g. who cleared an alarm_cleared event', async () => {
+    const harness = buildHarness();
+    const nextMessage = await connect(harness);
+    await nextMessage(0);
+
+    const event = harness.eventRepo.record({
+      type: 'alarm_cleared',
+      source: 'user',
+      details: 'Cleared by Alice',
+    });
+
+    const message = await nextMessage(1);
+    expect(message).toEqual({
+      type: 'event.recorded',
+      event: { id: event.id, type: 'alarm_cleared', occurredAt: event.occurredAt, details: 'Cleared by Alice' },
     });
   });
 

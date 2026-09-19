@@ -133,4 +133,33 @@ describe('Siren', () => {
     expect(() => panelService.reportSensorBreach(lifeSafetySensor)).not.toThrow();
     expect(panelService.getState().mode).toBe('alarm_triggered');
   });
+
+  it('logs a startup warning when constructed with no siren node configured', () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    buildHarness(null);
+
+    const warnEntry = logSpy.mock.calls
+      .map((call) => JSON.parse(call[0] as string) as Record<string, unknown>)
+      .find((entry) => entry.level === 'warn');
+    expect(warnEntry).toMatchObject({
+      module: 'alarm/siren',
+      message: expect.stringContaining('no siren device configured'),
+    });
+
+    logSpy.mockRestore();
+  });
+
+  it('does not log a startup warning when a siren node is configured', () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    buildHarness(5);
+
+    const warnEntry = logSpy.mock.calls
+      .map((call) => JSON.parse(call[0] as string) as Record<string, unknown>)
+      .find((entry) => entry.level === 'warn');
+    expect(warnEntry).toBeUndefined();
+
+    logSpy.mockRestore();
+  });
 });

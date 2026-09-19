@@ -33,8 +33,10 @@ On connect, the server sends one `snapshot` event with the full current state, t
 ### `event.recorded`
 
 ```json
-{ "type": "event.recorded", "event": { "id": "...", "type": "lockout", "occurredAt": "..." } }
+{ "type": "event.recorded", "event": { "id": "...", "type": "lockout", "occurredAt": "...", "details": null } }
 ```
+
+`details` is a free-text field, non-null for e.g. an `alarm_cleared` event, where it holds "Cleared by \<name\>" or "Cleared by Home Assistant" (User Story 3's second acceptance scenario — recipients must be told the alarm was cleared, and by whom).
 
 ## Client → server messages
 

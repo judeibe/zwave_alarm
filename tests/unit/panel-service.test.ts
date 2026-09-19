@@ -127,6 +127,42 @@ describe('PanelService', () => {
     expect(types).toEqual(['alarm_cleared', 'breach', 'armed']);
   });
 
+  it('records who cleared a triggered alarm on the alarm_cleared event', async () => {
+    const { service, eventRepo, lifeSafetySensor, userId } = buildService();
+
+    service.reportSensorBreach(lifeSafetySensor);
+    expect(service.getState().mode).toBe('alarm_triggered');
+
+    await service.disarm({ source: 'native', sourceUserId: userId, clearedBy: 'Alice' });
+
+    const clearedEvent = eventRepo.list().find((e) => e.type === 'alarm_cleared');
+    expect(clearedEvent?.details).toBe('Cleared by Alice');
+  });
+
+  it('records "Home Assistant" as who cleared a triggered alarm when disarmed via HA', async () => {
+    const { service, eventRepo, lifeSafetySensor, userId } = buildService();
+
+    service.reportSensorBreach(lifeSafetySensor);
+    expect(service.getState().mode).toBe('alarm_triggered');
+
+    await service.disarm({ source: 'home_assistant', sourceUserId: userId, clearedBy: 'Home Assistant' });
+
+    const clearedEvent = eventRepo.list().find((e) => e.type === 'alarm_cleared');
+    expect(clearedEvent?.details).toBe('Cleared by Home Assistant');
+  });
+
+  it('a plain disarm (not clearing an alarm) records no clearedBy details even if provided', async () => {
+    const { service, eventRepo, userId } = buildService();
+
+    await service.arm('armed_away', { source: 'native' });
+    await vi.advanceTimersByTimeAsync(EXIT_DELAY_MS);
+
+    await service.disarm({ source: 'native', sourceUserId: userId, clearedBy: 'Alice' });
+
+    const disarmedEvent = eventRepo.list().find((e) => e.type === 'disarmed');
+    expect(disarmedEvent?.details).toBeNull();
+  });
+
   it('an intrusion breach while disarmed is ignored (armed-state-gated per FR-003)', () => {
     const { service, eventRepo, intrusionSensor } = buildService();
 

@@ -91,7 +91,9 @@ export function attachWsBroadcaster(wss: WebSocketServer, deps: WsBroadcasterDep
   deps.eventRepo.on('event_recorded', (event: SecurityEvent) => {
     broadcast(wss, {
       type: 'event.recorded',
-      event: { id: event.id, type: event.type, occurredAt: event.occurredAt },
+      // `details` carries e.g. "Cleared by <name>"/"Cleared by Home Assistant" on `alarm_cleared`
+      // events (User Story 3: recipients must be told the alarm was cleared, and by whom).
+      event: { id: event.id, type: event.type, occurredAt: event.occurredAt, details: event.details },
     });
   });
 }

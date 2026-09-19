@@ -35,6 +35,13 @@ export class Siren {
     options: SirenOptions,
   ) {
     this.nodeId = options.nodeId;
+    if (this.nodeId === null) {
+      // FR-013 requires the local siren to be the authoritative notification, so a fresh install
+      // with no SIREN_NODE_ID set is a real gap the installer needs to notice, not a silent no-op.
+      logger.warn(
+        'no siren device configured (SIREN_NODE_ID unset) — the local siren will not sound when the alarm triggers',
+      );
+    }
     panelService.on('panel_changed', (panel: AlarmPanel) => this.handlePanelChanged(panel));
   }
 

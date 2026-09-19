@@ -14,6 +14,12 @@ export interface PanelCommandOptions {
   requestedAt?: number;
   /** The authenticated user who issued the command, if any (null for e.g. a schedule). */
   sourceUserId?: string | null;
+  /**
+   * Human-readable identity of the caller (e.g. a user's display name, or "Home Assistant"
+   * for an HA-originated command), recorded on the `alarm_cleared` SecurityEvent so recipients
+   * can be told "cleared, and by whom" (User Story 3's second acceptance scenario in spec.md).
+   */
+  clearedBy?: string | null;
 }
 
 export type SensorBreachInput = Pick<SensorDevice, 'id' | 'zoneId' | 'category'>;
@@ -30,6 +36,7 @@ const DEFAULT_ENTRY_DELAY_MS = 30_000;
 interface CommandContext {
   source: CommandSource;
   sourceUserId: string | null;
+  clearedBy: string | null;
 }
 
 type PanelCommand = 'arm_away' | 'arm_home' | 'disarm';
@@ -125,12 +132,20 @@ export class PanelService extends EventEmitter {
       source: options.source,
       requestedAt: options.requestedAt ?? Date.now(),
     };
-    this.commandContext.set(request, { source: options.source, sourceUserId: options.sourceUserId ?? null });
+    this.commandContext.set(request, {
+      source: options.source,
+      sourceUserId: options.sourceUserId ?? null,
+      clearedBy: options.clearedBy ?? null,
+    });
     return this.dispatcher.dispatch<AlarmPanel>(request);
   }
 
   private handleCommand(request: AlarmCommandRequest): AlarmPanel {
-    const context = this.commandContext.get(request) ?? { source: request.source, sourceUserId: null };
+    const context = this.commandContext.get(request) ?? {
+      source: request.source,
+      sourceUserId: null,
+      clearedBy: null,
+    };
     this.commandContext.delete(request);
 
     switch (request.command as PanelCommand) {
@@ -190,6 +205,9 @@ export class PanelService extends EventEmitter {
       type: wasAlarm ? 'alarm_cleared' : 'disarmed',
       source: context.source === 'home_assistant' ? 'home_assistant' : 'user',
       sourceUserId: context.sourceUserId,
+      // Only the alarm-clearing case needs "cleared, and by whom" (User Story 3's second
+      // acceptance scenario); a plain disarm from an already-safe state doesn't.
+      details: wasAlarm && context.clearedBy ? `Cleared by ${context.clearedBy}` : null,
     });
     return panel;
   }
