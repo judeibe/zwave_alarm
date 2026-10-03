@@ -29,12 +29,12 @@ Single project (per `plan.md`): `src/`, `tests/` at repository root, plus `ha-in
 
 **Purpose**: Project initialization and basic structure
 
-- [ ] T001 Create project structure per plan.md (`src/{alarm,zwave,auth,events,api,web,db,config}/`, `tests/{contract,integration,unit}/`, `ha-integration/custom_components/zwave_alarm/`)
-- [ ] T002 Initialize the Node/TypeScript project: `package.json`, `tsconfig.json`, and dependencies (`express`, `zwave-js`, `zwave-js-server`, `ws`, `better-sqlite3`)
-- [ ] T003 [P] Configure ESLint + Prettier for the TypeScript project (`.eslintrc`, `.prettierrc`)
-- [ ] T004 [P] Configure Vitest in `vitest.config.ts` and add `test`/`test:watch` npm scripts
-- [ ] T005 [P] Write `Dockerfile` and `docker-compose.yml` with Z-Wave USB device passthrough for local/self-hosted runs
-- [ ] T006 [P] Implement 12-factor environment configuration loader in `src/config/index.ts` (`SERIAL_PORT`, `DB_PATH`, REST/WS ports, `.env.example`)
+- [X] T001 Create project structure per plan.md (`src/{alarm,zwave,auth,events,api,web,db,config}/`, `tests/{contract,integration,unit}/`, `ha-integration/custom_components/zwave_alarm/`)
+- [X] T002 Initialize the Node/TypeScript project: `package.json`, `tsconfig.json`, and dependencies (`express`, `zwave-js`, `zwave-js-server`, `ws`, `better-sqlite3`)
+- [X] T003 [P] Configure ESLint + Prettier for the TypeScript project (`.eslintrc`, `.prettierrc`)
+- [X] T004 [P] Configure Vitest in `vitest.config.ts` and add `test`/`test:watch` npm scripts
+- [X] T005 [P] Write `Dockerfile` and `docker-compose.yml` with Z-Wave USB device passthrough for local/self-hosted runs
+- [X] T006 [P] Implement 12-factor environment configuration loader in `src/config/index.ts` (`SERIAL_PORT`, `DB_PATH`, REST/WS ports, `.env.example`)
 
 ---
 
@@ -44,16 +44,16 @@ Single project (per `plan.md`): `src/`, `tests/` at repository root, plus `ha-in
 
 **⚠️ CRITICAL**: No user story work can begin until this phase is complete
 
-- [ ] T007 Create SQLite schema and migration runner in `src/db/schema.ts` (`better-sqlite3`) covering all tables from `data-model.md`
-- [ ] T008 [P] Implement a generic repository base (query/transaction helpers) in `src/db/repository.ts`
-- [ ] T009 Bootstrap the `zwave-js` driver connection (owns the serial port, FR-005) in `src/zwave/driver.ts`
-- [ ] T010 Bootstrap `zwave-js-server` on top of the driver in `src/zwave/server.ts`, exposing the standard protocol Home Assistant's built-in Z-Wave JS integration will consume
-- [ ] T011 [P] Implement the Express app skeleton, error-handling middleware, and error-response format in `src/api/app.ts` (`contracts/rest-api.md` error format)
-- [ ] T012 [P] Implement the `ws` push-channel skeleton (connect, `snapshot` handshake, `ping`/`pong`) in `src/api/ws.ts` per `contracts/websocket-events.md`
-- [ ] T013 Implement session-cookie authentication middleware for the native dashboard in `src/auth/session.ts`
-- [ ] T014 Implement bearer-token authentication middleware for Home Assistant links in `src/auth/token.ts`
-- [ ] T015 [P] Implement the single-writer AlarmPanel command dispatcher enforcing native-interface precedence (FR-014) in `src/alarm/dispatcher.ts`
-- [ ] T016 [P] Implement structured logging setup in `src/config/logger.ts`
+- [X] T007 Create SQLite schema and migration runner in `src/db/schema.ts` (`better-sqlite3`) covering all tables from `data-model.md`
+- [X] T008 [P] Implement a generic repository base (query/transaction helpers) in `src/db/repository.ts`
+- [X] T009 Bootstrap the `zwave-js` driver connection (owns the serial port, FR-005) in `src/zwave/driver.ts`
+- [X] T010 Bootstrap `zwave-js-server` on top of the driver in `src/zwave/server.ts`, exposing the standard protocol Home Assistant's built-in Z-Wave JS integration will consume
+- [X] T011 [P] Implement the Express app skeleton, error-handling middleware, and error-response format in `src/api/app.ts` (`contracts/rest-api.md` error format)
+- [X] T012 [P] Implement the `ws` push-channel skeleton (connect, `snapshot` handshake, `ping`/`pong`) in `src/api/ws.ts` per `contracts/websocket-events.md`
+- [X] T013 Implement session-cookie authentication middleware for the native dashboard in `src/auth/session.ts`
+- [X] T014 Implement bearer-token authentication middleware for Home Assistant links in `src/auth/token.ts`
+- [X] T015 [P] Implement the single-writer AlarmPanel command dispatcher enforcing native-interface precedence (FR-014) in `src/alarm/dispatcher.ts`
+- [X] T016 [P] Implement structured logging setup in `src/config/logger.ts`
 
 **Checkpoint**: Foundation ready - user story implementation can now begin
 
@@ -67,20 +67,20 @@ Single project (per `plan.md`): `src/`, `tests/` at repository root, plus `ha-in
 
 ### Implementation for User Story 1
 
-- [ ] T017 [P] [US1] Create AlarmPanel model + repository (singleton, mode/pendingDelayEndsAt/triggeredBy) in `src/alarm/panel-repository.ts`
-- [ ] T018 [P] [US1] Create Zone model + repository in `src/db/repositories/zone-repository.ts`
-- [ ] T019 [P] [US1] Create SensorDevice model + repository, including the `intrusion`/`life-safety` category field, in `src/db/repositories/sensor-repository.ts`
-- [ ] T020 [P] [US1] Create SecurityEvent model + repository (append-only log) in `src/events/event-repository.ts`
-- [ ] T021 [P] [US1] Create User model + repository with Administrator/Member/Guest roles (FR-010a) in `src/auth/user-repository.ts`
-- [ ] T022 [P] [US1] Create LockoutPolicy model + repository (threshold/cooldown/mode) in `src/auth/lockout-policy-repository.ts`
-- [ ] T023 [US1] Implement the AlarmPanel state-machine service — arm/disarm, exit/entry delay, life-safety sensors bypass delay (FR-001, FR-003, FR-004, FR-015) — in `src/alarm/panel-service.ts` (depends on T017-T020, T015)
-- [ ] T024 [US1] Implement `zwave-js` node-to-sensor mapping, breach detection, and connectivity/battery fault detection (FR-002, FR-012) in `src/zwave/sensor-mapper.ts` (depends on T009, T019)
-- [ ] T025 [US1] Implement failed disarm-attempt lockout enforcement, including the `trigger_alarm` mode switch (FR-016) in `src/auth/lockout-service.ts` (depends on T021, T022, T023)
-- [ ] T026 [US1] Implement local siren activation on `alarm_triggered` via a configured Z-Wave alert device (FR-013) in `src/alarm/siren.ts` (depends on T023)
-- [ ] T027 [US1] Implement REST endpoints `POST /api/v1/auth/login`, `POST /api/v1/auth/logout`, `GET/POST /api/v1/panel*`, `GET/POST /api/v1/zones`, `POST /api/v1/zones/{zoneId}/sensors`, `GET/POST/DELETE /api/v1/users` in `src/api/routes/` (depends on T023-T025)
-- [ ] T028 [US1] Implement `GET /api/v1/events` in `src/api/routes/event-routes.ts` (depends on T020)
-- [ ] T029 [US1] Wire panel/sensor/event changes to the WebSocket channel (`panel.changed`, `sensor.changed`, `sensor.fault`, `event.recorded`) in `src/api/ws-broadcaster.ts` (depends on T012, T023, T024)
-- [ ] T030 [US1] Build the minimal bundled static dashboard (arm/disarm controls, zone/sensor status, fault indicators) in `src/web/index.html` and `src/web/app.js`, served by Express (depends on T027, T029)
+- [X] T017 [P] [US1] Create AlarmPanel model + repository (singleton, mode/pendingDelayEndsAt/triggeredBy) in `src/alarm/panel-repository.ts`
+- [X] T018 [P] [US1] Create Zone model + repository in `src/db/repositories/zone-repository.ts`
+- [X] T019 [P] [US1] Create SensorDevice model + repository, including the `intrusion`/`life-safety` category field, in `src/db/repositories/sensor-repository.ts`
+- [X] T020 [P] [US1] Create SecurityEvent model + repository (append-only log) in `src/events/event-repository.ts`
+- [X] T021 [P] [US1] Create User model + repository with Administrator/Member/Guest roles (FR-010a) in `src/auth/user-repository.ts`
+- [X] T022 [P] [US1] Create LockoutPolicy model + repository (threshold/cooldown/mode) in `src/auth/lockout-policy-repository.ts`
+- [X] T023 [US1] Implement the AlarmPanel state-machine service — arm/disarm, exit/entry delay, life-safety sensors bypass delay (FR-001, FR-003, FR-004, FR-015) — in `src/alarm/panel-service.ts` (depends on T017-T020, T015)
+- [X] T024 [US1] Implement `zwave-js` node-to-sensor mapping, breach detection, and connectivity/battery fault detection (FR-002, FR-012) in `src/zwave/sensor-mapper.ts` (depends on T009, T019)
+- [X] T025 [US1] Implement failed disarm-attempt lockout enforcement, including the `trigger_alarm` mode switch (FR-016) in `src/auth/lockout-service.ts` (depends on T021, T022, T023)
+- [X] T026 [US1] Implement local siren activation on `alarm_triggered` via a configured Z-Wave alert device (FR-013) in `src/alarm/siren.ts` (depends on T023)
+- [X] T027 [US1] Implement REST endpoints `POST /api/v1/auth/login`, `POST /api/v1/auth/logout`, `GET/POST /api/v1/panel*`, `GET/POST /api/v1/zones`, `POST /api/v1/zones/{zoneId}/sensors`, `GET/POST/DELETE /api/v1/users` in `src/api/routes/` (depends on T023-T025)
+- [X] T028 [US1] Implement `GET /api/v1/events` in `src/api/routes/event-routes.ts` (depends on T020)
+- [X] T029 [US1] Wire panel/sensor/event changes to the WebSocket channel (`panel.changed`, `sensor.changed`, `sensor.fault`, `event.recorded`) in `src/api/ws-broadcaster.ts` (depends on T012, T023, T024)
+- [X] T030 [US1] Build the minimal bundled static dashboard (arm/disarm controls, zone/sensor status, fault indicators) in `src/web/index.html` and `src/web/app.js`, served by Express (depends on T027, T029)
 
 **Checkpoint**: At this point, User Story 1 should be fully functional and testable independently of Home Assistant
 
@@ -94,15 +94,15 @@ Single project (per `plan.md`): `src/`, `tests/` at repository root, plus `ha-in
 
 ### Implementation for User Story 2
 
-- [ ] T031 [P] [US2] Create HomeAssistantLink model + repository (token hash, label, connection status) in `src/db/repositories/ha-link-repository.ts`
-- [ ] T032 [US2] Implement `POST /api/v1/ha-links` and `DELETE /api/v1/ha-links/{linkId}` (token issuance/revocation) in `src/api/routes/ha-link-routes.ts` (depends on T031, T014)
-- [ ] T033 [US2] Harden `zwave-js-server`'s bound host/port for external Home Assistant consumption in `src/zwave/server.ts` (depends on T010)
-- [ ] T034 [US2] Implement WebSocket reconnect/resync semantics — fresh `snapshot` required after reconnect — in `src/api/ws.ts` (depends on T012, T029)
-- [ ] T035 [P] [US2] Scaffold the Home Assistant custom component (`manifest.json`, `config_flow.py` validating against `GET /api/v1/panel`) in `ha-integration/custom_components/zwave_alarm/`
-- [ ] T036 [US2] Implement the `alarm_control_panel.zwave_alarm` entity in `ha-integration/custom_components/zwave_alarm/alarm_control_panel.py` (depends on T035, T027)
-- [ ] T037 [P] [US2] Implement per-zone `binary_sensor.zwave_alarm_zone_<zone>` entities in `ha-integration/custom_components/zwave_alarm/binary_sensor.py` (depends on T035)
-- [ ] T038 [P] [US2] Implement the `sensor.zwave_alarm_fault_count` entity in `ha-integration/custom_components/zwave_alarm/sensor.py` (depends on T035)
-- [ ] T039 [US2] Implement the WebSocket client coordinator with retry/backoff and `unavailable`-state handling (FR-006) in `ha-integration/custom_components/zwave_alarm/coordinator.py` (depends on T034, T035)
+- [X] T031 [P] [US2] Create HomeAssistantLink model + repository (token hash, label, connection status) in `src/db/repositories/ha-link-repository.ts`
+- [X] T032 [US2] Implement `POST /api/v1/ha-links` and `DELETE /api/v1/ha-links/{linkId}` (token issuance/revocation) in `src/api/routes/ha-link-routes.ts` (depends on T031, T014)
+- [X] T033 [US2] Harden `zwave-js-server`'s bound host/port for external Home Assistant consumption in `src/zwave/server.ts` (depends on T010)
+- [X] T034 [US2] Implement WebSocket reconnect/resync semantics — fresh `snapshot` required after reconnect — in `src/api/ws.ts` (depends on T012, T029)
+- [X] T035 [P] [US2] Scaffold the Home Assistant custom component (`manifest.json`, `config_flow.py` validating against `GET /api/v1/panel`) in `ha-integration/custom_components/zwave_alarm/`
+- [X] T036 [US2] Implement the `alarm_control_panel.zwave_alarm` entity in `ha-integration/custom_components/zwave_alarm/alarm_control_panel.py` (depends on T035, T027)
+- [X] T037 [P] [US2] Implement per-zone `binary_sensor.zwave_alarm_zone_<zone>` entities in `ha-integration/custom_components/zwave_alarm/binary_sensor.py` (depends on T035)
+- [X] T038 [P] [US2] Implement the `sensor.zwave_alarm_fault_count` entity in `ha-integration/custom_components/zwave_alarm/sensor.py` (depends on T035)
+- [X] T039 [US2] Implement the WebSocket client coordinator with retry/backoff and `unavailable`-state handling (FR-006) in `ha-integration/custom_components/zwave_alarm/coordinator.py` (depends on T034, T035)
 
 **Checkpoint**: At this point, User Stories 1 AND 2 should both work independently, plus raw sensor entities via Home Assistant's built-in Z-Wave JS integration talking to T010/T033
 
@@ -116,9 +116,9 @@ Single project (per `plan.md`): `src/`, `tests/` at repository root, plus `ha-in
 
 ### Implementation for User Story 3
 
-- [ ] T040 [US3] Extend siren activation with configurable target Z-Wave alert device selection (FR-013) in `src/alarm/siren.ts` (depends on T026)
-- [ ] T041 [US3] Record and broadcast "alarm cleared, and by whom" detail on disarm-after-trigger (User Story 3 acceptance scenario 2) in `src/alarm/panel-service.ts` and `src/api/ws-broadcaster.ts` (depends on T023, T029)
-- [ ] T042 [P] [US3] Document a sample Home Assistant automation (notify on `alarm_control_panel.zwave_alarm` → `triggered`) in `ha-integration/README.md` (depends on T036)
+- [X] T040 [US3] Extend siren activation with configurable target Z-Wave alert device selection (FR-013) in `src/alarm/siren.ts` (depends on T026)
+- [X] T041 [US3] Record and broadcast "alarm cleared, and by whom" detail on disarm-after-trigger (User Story 3 acceptance scenario 2) in `src/alarm/panel-service.ts` and `src/api/ws-broadcaster.ts` (depends on T023, T029)
+- [X] T042 [P] [US3] Document a sample Home Assistant automation (notify on `alarm_control_panel.zwave_alarm` → `triggered`) in `ha-integration/README.md` (depends on T036)
 
 **Checkpoint**: All user stories should now be independently functional
 
