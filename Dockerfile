@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
 # ---- Build stage: compile TypeScript to dist/ ----
-FROM node:20-slim AS builder
+FROM node:22-slim AS builder
 
 # better-sqlite3 is a native addon and needs a toolchain to compile during `npm ci`.
 RUN apt-get update \
@@ -10,8 +10,12 @@ RUN apt-get update \
 
 WORKDIR /app
 
+# Manifests first, source later: this layer (and the install below) is only invalidated when
+# package.json/package-lock.json change, so editing src/ never re-runs `npm ci`. The BuildKit cache
+# mount additionally keeps npm's download cache between builds when the lockfile does change.
 COPY package.json package-lock.json ./
-RUN npm ci
+RUN --mount=type=cache,target=/root/.npm \
+    npm ci --no-audit --no-fund
 
 COPY tsconfig.json ./
 COPY src ./src
@@ -19,10 +23,11 @@ RUN npm run build
 
 # Drop devDependencies now, in the stage that already has the compiled
 # native addon, so the runtime stage doesn't need a compiler toolchain at all.
-RUN npm prune --omit=dev
+RUN --mount=type=cache,target=/root/.npm \
+    npm prune --omit=dev --no-audit --no-fund
 
-# ---- Runtime stage: run the compiled output on a slim Node 20 base ----
-FROM node:20-slim AS runtime
+# ---- Runtime stage: run the compiled output on a slim Node 22 base ----
+FROM node:22-slim AS runtime
 
 ENV NODE_ENV=production
 WORKDIR /app

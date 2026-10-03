@@ -133,7 +133,7 @@ Single project (per `plan.md`): `src/`, `tests/` at repository root, plus `ha-in
 - [X] T045 Security hardening: hash disarm codes and HA tokens (e.g., argon2/bcrypt), rate-limit `/api/v1/auth/login` in `src/auth/`
 - [X] T046 [P] Add structured logging across `src/zwave/`, `src/alarm/`, and `src/api/` using the Phase 2 logger
 - [ ] T047 Run the full `quickstart.md` validation end-to-end and fix any gaps found
-- [ ] T048 [P] Optimize the multi-stage `Dockerfile` build (dependency caching, image size)
+- [X] T048 [P] Optimize the multi-stage `Dockerfile` build (dependency caching, image size)
 
 ---
 
