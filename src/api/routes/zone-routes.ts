@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import type { Driver } from 'zwave-js';
 import { ApiError } from '../app.js';
+import { assignSensorBodySchema, createZoneBodySchema, validateBody } from '../validation.js';
 import { requireAuth, requireRole } from '../../auth/authorize.js';
 import type { ZoneRepository } from '../../db/repositories/zone-repository.js';
 import type { SensorCategory, SensorRepository } from '../../db/repositories/sensor-repository.js';
@@ -12,34 +13,10 @@ export interface ZoneRouteDeps {
   driver: Pick<Driver, 'controller'>;
 }
 
-function requireZoneName(body: unknown): string {
-  const name = (body as { name?: unknown } | null)?.name;
-  if (typeof name !== 'string' || name.length === 0) {
-    throw new ApiError(400, 'bad_request', 'Body must include a non-empty "name" string.');
-  }
-  return name;
-}
-
 interface AssignSensorBody {
   zwaveNodeId: number;
   name: string;
   category: SensorCategory;
-}
-
-function requireAssignSensorBody(body: unknown): AssignSensorBody {
-  const { zwaveNodeId, name, category } = (body ?? {}) as Record<string, unknown>;
-
-  if (typeof zwaveNodeId !== 'number' || !Number.isInteger(zwaveNodeId)) {
-    throw new ApiError(400, 'bad_request', 'Body must include an integer "zwaveNodeId".');
-  }
-  if (typeof name !== 'string' || name.length === 0) {
-    throw new ApiError(400, 'bad_request', 'Body must include a non-empty "name" string.');
-  }
-  if (category !== 'intrusion' && category !== 'life-safety') {
-    throw new ApiError(400, 'bad_request', 'Body must include "category": "intrusion" or "life-safety".');
-  }
-
-  return { zwaveNodeId, name, category };
 }
 
 /**
@@ -62,40 +39,46 @@ export function createZoneRouter({ zoneRepo, sensorRepo, driver }: ZoneRouteDeps
     res.status(200).json(zoneRepo.list());
   });
 
-  router.post('/zones', requireAuth, requireRole('administrator'), (req, res) => {
-    const name = requireZoneName(req.body);
+  router.post('/zones', requireAuth, requireRole('administrator'), validateBody(createZoneBodySchema), (req, res) => {
+    const { name } = req.body as { name: string };
     res.status(201).json(zoneRepo.create(name));
   });
 
-  router.post('/zones/:zoneId/sensors', requireAuth, requireRole('administrator'), (req, res) => {
-    const { zwaveNodeId, name, category } = requireAssignSensorBody(req.body);
+  router.post(
+    '/zones/:zoneId/sensors',
+    requireAuth,
+    requireRole('administrator'),
+    validateBody(assignSensorBodySchema),
+    (req, res) => {
+      const { zwaveNodeId, name, category } = req.body as AssignSensorBody;
 
-    let nodeIsKnown: boolean;
-    try {
-      // `driver.controller` throws until the zwave-js driver finishes
-      // starting (src/index.ts defers SensorMapper.start() for the same
-      // reason) — treat that as "can't validate yet" rather than a generic 500.
-      nodeIsKnown = driver.controller.nodes.get(zwaveNodeId) !== undefined;
-    } catch {
-      throw new ApiError(503, 'unavailable', 'The zwave-js driver is not ready yet; try again shortly.');
-    }
-    if (!nodeIsKnown) {
-      throw new ApiError(400, 'bad_request', `zwave-js node ${zwaveNodeId} is not known to the driver.`);
-    }
+      let nodeIsKnown: boolean;
+      try {
+        // `driver.controller` throws until the zwave-js driver finishes
+        // starting (src/index.ts defers SensorMapper.start() for the same
+        // reason) — treat that as "can't validate yet" rather than a generic 500.
+        nodeIsKnown = driver.controller.nodes.get(zwaveNodeId) !== undefined;
+      } catch {
+        throw new ApiError(503, 'unavailable', 'The zwave-js driver is not ready yet; try again shortly.');
+      }
+      if (!nodeIsKnown) {
+        throw new ApiError(400, 'bad_request', `zwave-js node ${zwaveNodeId} is not known to the driver.`);
+      }
 
-    try {
-      const sensor = sensorRepo.create({ zwaveNodeId, zoneId: req.params.zoneId, name, category });
-      res.status(201).json(sensor);
-    } catch (err) {
-      if (err instanceof Error && err.message.includes('already assigned')) {
-        throw new ApiError(409, 'conflict', err.message);
+      try {
+        const sensor = sensorRepo.create({ zwaveNodeId, zoneId: req.params.zoneId, name, category });
+        res.status(201).json(sensor);
+      } catch (err) {
+        if (err instanceof Error && err.message.includes('already assigned')) {
+          throw new ApiError(409, 'conflict', err.message);
+        }
+        if (err instanceof Error && err.message.includes('FOREIGN KEY')) {
+          throw new ApiError(404, 'not_found', `Zone ${req.params.zoneId} does not exist.`);
+        }
+        throw err;
       }
-      if (err instanceof Error && err.message.includes('FOREIGN KEY')) {
-        throw new ApiError(404, 'not_found', `Zone ${req.params.zoneId} does not exist.`);
-      }
-      throw err;
-    }
-  });
+    },
+  );
 
   return router;
 }

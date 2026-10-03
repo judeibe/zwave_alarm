@@ -1,19 +1,15 @@
 import { Router } from 'express';
 import { ApiError } from '../app.js';
+import { codeBodySchema, validateBody } from '../validation.js';
+import { createLoginRateLimiter, type LoginRateLimitOptions } from '../../auth/rate-limit.js';
 import type { LockoutService } from '../../auth/lockout-service.js';
 import type { UserRepository } from '../../auth/user-repository.js';
 
 export interface AuthRouteDeps {
   userRepo: UserRepository;
   lockoutService: LockoutService;
-}
-
-function requireCode(body: unknown): string {
-  const code = (body as { code?: unknown } | null)?.code;
-  if (typeof code !== 'string' || code.length === 0) {
-    throw new ApiError(400, 'bad_request', 'Body must include a non-empty "code" string.');
-  }
-  return code;
+  /** Overrides the login throttle (tests); production uses the defaults in src/auth/rate-limit.ts. */
+  loginRateLimit?: LoginRateLimitOptions;
 }
 
 /**
@@ -29,14 +25,16 @@ function requireCode(body: unknown): string {
  * so unlike `POST /api/v1/panel/disarm` (which already has an authenticated
  * session identifying exactly who is retrying), a wrong code here is just a
  * plain 401 with no LockoutService (T025) bookkeeping — there is nothing to
- * increment. The "wrong code" flow the quickstart's lockout scenario
- * (section 6) actually exercises is disarm, not login.
+ * increment. Code-guessing at login is instead bounded by a per-IP rate
+ * limit (src/auth/rate-limit.ts). The "wrong code" flow the quickstart's
+ * lockout scenario (section 6) actually exercises is disarm, not login.
  */
-export function createAuthRouter({ userRepo, lockoutService }: AuthRouteDeps): Router {
+export function createAuthRouter({ userRepo, lockoutService, loginRateLimit }: AuthRouteDeps): Router {
   const router = Router();
+  const loginLimiter = createLoginRateLimiter(loginRateLimit);
 
-  router.post('/auth/login', (req, res) => {
-    const code = requireCode(req.body);
+  router.post('/auth/login', loginLimiter, validateBody(codeBodySchema), (req, res) => {
+    const { code } = req.body as { code: string };
     const user = userRepo.findByCode(code);
 
     if (user === undefined) {

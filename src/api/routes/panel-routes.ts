@@ -1,6 +1,7 @@
 import { Router, type Request } from 'express';
 import { ApiError } from '../app.js';
 import { asyncHandler } from '../async-handler.js';
+import { armBodySchema, codeBodySchema, validateBody } from '../validation.js';
 import { requireAuth, requireRole } from '../../auth/authorize.js';
 import { CommandRejectedError, type CommandSource } from '../../alarm/dispatcher.js';
 import { PanelStateError, type ArmMode, type PanelService } from '../../alarm/panel-service.js';
@@ -19,22 +20,6 @@ function commandSource(req: Request): CommandSource {
 
 function callerUserId(req: Request): string | undefined {
   return req.session?.userId ?? req.haLink?.userId;
-}
-
-function requireArmMode(body: unknown): ArmMode {
-  const mode = (body as { mode?: unknown } | null)?.mode;
-  if (mode !== 'armed_away' && mode !== 'armed_home') {
-    throw new ApiError(400, 'bad_request', 'Body must include "mode": "armed_away" or "armed_home".');
-  }
-  return mode;
-}
-
-function requireCode(body: unknown): string {
-  const code = (body as { code?: unknown } | null)?.code;
-  if (typeof code !== 'string' || code.length === 0) {
-    throw new ApiError(400, 'bad_request', 'Body must include a non-empty "code" string.');
-  }
-  return code;
 }
 
 /**
@@ -65,8 +50,9 @@ export function createPanelRouter({ panelService, userRepo, lockoutService }: Pa
     '/panel/arm',
     requireAuth,
     requireRole('administrator', 'member'),
+    validateBody(armBodySchema),
     asyncHandler(async (req, res) => {
-      const mode = requireArmMode(req.body);
+      const { mode } = req.body as { mode: ArmMode };
 
       try {
         const panel = await panelService.arm(mode, {
@@ -89,8 +75,9 @@ export function createPanelRouter({ panelService, userRepo, lockoutService }: Pa
   router.post(
     '/panel/disarm',
     requireAuth,
+    validateBody(codeBodySchema),
     asyncHandler(async (req, res) => {
-      const code = requireCode(req.body);
+      const { code } = req.body as { code: string };
       const userId = callerUserId(req);
       const user = userId === undefined ? undefined : userRepo.findById(userId);
       if (user === undefined) {

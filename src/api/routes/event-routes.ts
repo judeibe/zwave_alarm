@@ -1,40 +1,10 @@
 import { Router } from 'express';
-import { ApiError } from '../app.js';
+import { eventsQuerySchema, parsedQuery, validateQuery } from '../validation.js';
 import { requireAuth, requireRole } from '../../auth/authorize.js';
 import type { EventRepository, ListSecurityEventsOptions } from '../../events/event-repository.js';
 
 export interface EventRouteDeps {
   eventRepo: EventRepository;
-}
-
-/** Parses `?since=` into an epoch-ms number, or throws 400 if present but not a valid one. */
-function parseSince(value: unknown): number | undefined {
-  if (value === undefined) {
-    return undefined;
-  }
-  if (typeof value !== 'string' || value.length === 0) {
-    throw new ApiError(400, 'bad_request', '"since" must be a numeric epoch-ms timestamp.');
-  }
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed)) {
-    throw new ApiError(400, 'bad_request', '"since" must be a numeric epoch-ms timestamp.');
-  }
-  return parsed;
-}
-
-/** Parses `?limit=` into a positive integer, or throws 400 if present but not a valid one. */
-function parseLimit(value: unknown): number | undefined {
-  if (value === undefined) {
-    return undefined;
-  }
-  if (typeof value !== 'string' || value.length === 0) {
-    throw new ApiError(400, 'bad_request', '"limit" must be a positive integer.');
-  }
-  const parsed = Number(value);
-  if (!Number.isInteger(parsed) || parsed <= 0) {
-    throw new ApiError(400, 'bad_request', '"limit" must be a positive integer.');
-  }
-  return parsed;
 }
 
 /**
@@ -47,12 +17,8 @@ function parseLimit(value: unknown): number | undefined {
 export function createEventRouter({ eventRepo }: EventRouteDeps): Router {
   const router = Router();
 
-  router.get('/events', requireAuth, requireRole('administrator', 'member'), (req, res) => {
-    const options: ListSecurityEventsOptions = {
-      since: parseSince(req.query.since),
-      limit: parseLimit(req.query.limit),
-    };
-    res.status(200).json(eventRepo.list(options));
+  router.get('/events', requireAuth, requireRole('administrator', 'member'), validateQuery(eventsQuerySchema), (_req, res) => {
+    res.status(200).json(eventRepo.list(parsedQuery<ListSecurityEventsOptions>(res)));
   });
 
   return router;

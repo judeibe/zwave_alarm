@@ -7,8 +7,9 @@ export default tseslint.config(
   {
     // src/web is unbundled browser JS served as-is (T030) — no Node/TS
     // globals, no build step, so it's out of scope for this project's
-    // Node-focused TypeScript lint config.
-    ignores: ['dist/', 'node_modules/', 'coverage/', 'src/web/'],
+    // Node-focused TypeScript lint config. ha-integration is a Python project
+    // whose .venv ships vendored JS this config can't lint.
+    ignores: ['dist/', 'node_modules/', 'coverage/', 'src/web/', 'ha-integration/'],
   },
   eslint.configs.recommended,
   ...tseslint.configs.recommended,

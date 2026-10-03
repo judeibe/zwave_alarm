@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { ApiError } from '../app.js';
+import { createHaLinkBodySchema, validateBody } from '../validation.js';
 import { requireAuth, requireRole } from '../../auth/authorize.js';
 import type { HaLinkRepository, HomeAssistantLink } from '../../db/repositories/ha-link-repository.js';
 
@@ -26,14 +26,6 @@ function toPublicHaLink(link: HomeAssistantLink): PublicHaLink {
   };
 }
 
-function requireLabel(body: unknown): string {
-  const label = (body as { label?: unknown } | null)?.label;
-  if (typeof label !== 'string' || label.length === 0) {
-    throw new ApiError(400, 'bad_request', 'Body must include a non-empty "label" string.');
-  }
-  return label;
-}
-
 /**
  * `POST /api/v1/ha-links`, `DELETE /api/v1/ha-links/{linkId}` (contracts/rest-api.md's
  * "Home Assistant Links" section), wired to T031's HaLinkRepository —
@@ -44,8 +36,8 @@ function requireLabel(body: unknown): string {
 export function createHaLinkRouter({ haLinkRepo }: HaLinkRouteDeps): Router {
   const router = Router();
 
-  router.post('/ha-links', requireAuth, requireRole('administrator'), (req, res) => {
-    const label = requireLabel(req.body);
+  router.post('/ha-links', requireAuth, requireRole('administrator'), validateBody(createHaLinkBodySchema), (req, res) => {
+    const { label } = req.body as { label: string };
     // requireRole('administrator') only accepts a session-authenticated
     // caller or an HA-token caller resolved as administrator (authorize.ts's
     // resolveRole) — both populate one of these, so `userId` is always defined here.

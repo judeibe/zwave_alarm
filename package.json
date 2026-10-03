@@ -23,9 +23,11 @@
     "@zwave-js/server": "^3.10.1",
     "better-sqlite3": "^13.0.3",
     "express": "^5.2.1",
+    "express-rate-limit": "^8.7.0",
     "express-session": "^1.19.0",
     "typescript": "^6",
     "ws": "^8.21.3",
+    "zod": "^4.6.5",
     "zwave-js": "^15.28.0"
   },
   "devDependencies": {
