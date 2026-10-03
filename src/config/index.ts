@@ -9,6 +9,10 @@ export interface AppConfig {
   sessionSecret: string;
   /** Z-Wave node id of the configured siren/alert device (FR-013). Null until an installer sets it. */
   sirenNodeId: number | null;
+  /** Seconds between arming and the panel becoming armed (FR-004). One value for the whole panel. */
+  exitDelaySeconds: number;
+  /** Seconds between a breach and the alarm triggering (FR-004). One value for the whole panel. */
+  entryDelaySeconds: number;
 }
 
 export class ConfigError extends Error {}
@@ -47,6 +51,25 @@ function validateSessionSecret(secret: string): string {
     );
   }
   return secret;
+}
+
+const DEFAULT_DELAY_SECONDS = 30;
+const MAX_DELAY_SECONDS = 600;
+
+/**
+ * Optional delay in whole seconds, 0-600. 0 is allowed deliberately: no exit delay arms at once, and
+ * no entry delay raises the alarm the instant an intrusion sensor trips.
+ */
+function parseDelaySeconds(name: string): number {
+  const raw = process.env[name];
+  if (raw === undefined || raw === '') {
+    return DEFAULT_DELAY_SECONDS;
+  }
+  const seconds = Number(raw);
+  if (!Number.isInteger(seconds) || seconds < 0 || seconds > MAX_DELAY_SECONDS) {
+    throw new ConfigError(`${name} must be a whole number of seconds between 0 and ${MAX_DELAY_SECONDS}, got "${raw}"`);
+  }
+  return seconds;
 }
 
 function parseSirenNodeId(value: string): number {
@@ -94,6 +117,8 @@ function loadConfig(): AppConfig {
     zwaveServerHost,
     sessionSecret: validateSessionSecret(readEnv('SESSION_SECRET')!),
     sirenNodeId,
+    exitDelaySeconds: parseDelaySeconds('EXIT_DELAY_SECONDS'),
+    entryDelaySeconds: parseDelaySeconds('ENTRY_DELAY_SECONDS'),
   };
 }
 

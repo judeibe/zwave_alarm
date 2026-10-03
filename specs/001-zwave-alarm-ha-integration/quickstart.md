@@ -49,7 +49,7 @@ Confirm the bootstrap window has closed: repeating the first `POST /users` now r
 ## 3. Validate User Story 1 — standalone arm/disarm/monitor (no Home Assistant running)
 
 1. **(hardware)** Assign a paired Z-Wave contact sensor to the "Front Door" zone with `category: intrusion`: `curl -b jar -X POST $API/zones/<zoneId>/sensors -H 'Content-Type: application/json' -d '{"zwaveNodeId":2,"name":"Front door contact","category":"intrusion"}'` (see `contracts/rest-api.md`).
-2. Arm the system: `curl -b jar -X POST $API/panel/arm -H 'Content-Type: application/json' -d '{"mode":"armed_away"}'` returns immediately with `arming`. `GET $API/panel` shows `arming` with a `pendingDelayEndsAt`, then `armed_away` once the exit delay (30 s) has elapsed. Arming again while armed returns `409`.
+2. Arm the system: `curl -b jar -X POST $API/panel/arm -H 'Content-Type: application/json' -d '{"mode":"armed_away"}'` returns immediately with `arming`. `GET $API/panel` shows `arming` with a `pendingDelayEndsAt`, then `armed_away` once the exit delay has elapsed (30 s unless `EXIT_DELAY_SECONDS` is set). Arming again while armed returns `409`.
 3. **(hardware)** Open the door. Confirm the panel moves to `alarm_pending`, then `alarm_triggered` after the entry delay, and the configured siren activates (SC-001, SC-002, User Story 1 acceptance scenarios 1–2).
 4. Disarm with the administrator's code (`curl -b jar -X POST $API/panel/disarm -H 'Content-Type: application/json' -d '{"code":"123456"}'`) and confirm the panel returns to `disarmed` (acceptance scenario 3). `GET $API/events` lists the `armed`/`disarmed` events, newest first.
 5. **(hardware)** Unplug or disable a sensor and confirm it is reported as a `device_fault`, distinct from a breach (acceptance scenario 4, FR-012).

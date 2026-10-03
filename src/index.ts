@@ -37,7 +37,10 @@ const userRepo = new UserRepository(db);
 const lockoutPolicyRepo = new LockoutPolicyRepository(db);
 const haLinkRepo = new HaLinkRepository(db);
 
-const panelService = new PanelService(panelRepo, eventRepo);
+const panelService = new PanelService(panelRepo, eventRepo, {
+  exitDelayMs: config.exitDelaySeconds * 1000,
+  entryDelayMs: config.entryDelaySeconds * 1000,
+});
 const lockoutService = new LockoutService(userRepo, lockoutPolicyRepo, eventRepo, panelService);
 
 const driver = getDriver();

@@ -63,6 +63,57 @@ describe('config loader', () => {
     });
   });
 
+  describe('exit/entry delays (FR-004)', () => {
+    afterEach(() => {
+      delete process.env.EXIT_DELAY_SECONDS;
+      delete process.env.ENTRY_DELAY_SECONDS;
+    });
+
+    it('defaults both delays to 30 seconds', async () => {
+      setEnv();
+
+      const { config } = await import('../../src/config/index.js');
+
+      expect(config).toMatchObject({ exitDelaySeconds: 30, entryDelaySeconds: 30 });
+    });
+
+    it('reads them independently, treating an empty value as unset', async () => {
+      setEnv();
+      process.env.EXIT_DELAY_SECONDS = '60';
+      process.env.ENTRY_DELAY_SECONDS = '';
+
+      const { config } = await import('../../src/config/index.js');
+
+      expect(config).toMatchObject({ exitDelaySeconds: 60, entryDelaySeconds: 30 });
+    });
+
+    it('accepts 0 (no delay) and the 600 second maximum', async () => {
+      setEnv();
+      process.env.EXIT_DELAY_SECONDS = '0';
+      process.env.ENTRY_DELAY_SECONDS = '600';
+
+      const { config } = await import('../../src/config/index.js');
+
+      expect(config).toMatchObject({ exitDelaySeconds: 0, entryDelaySeconds: 600 });
+    });
+
+    it.each(['-1', '601', '1.5', 'soon'])('rejects EXIT_DELAY_SECONDS=%s', async (value) => {
+      setEnv();
+      process.env.EXIT_DELAY_SECONDS = value;
+
+      await expect(import('../../src/config/index.js')).rejects.toThrow(
+        new RegExp(`EXIT_DELAY_SECONDS must be a whole number of seconds between 0 and 600, got "${value}"`),
+      );
+    });
+
+    it('rejects an invalid ENTRY_DELAY_SECONDS', async () => {
+      setEnv();
+      process.env.ENTRY_DELAY_SECONDS = '9999';
+
+      await expect(import('../../src/config/index.js')).rejects.toThrow(/ENTRY_DELAY_SECONDS/);
+    });
+  });
+
   it('loads a valid configuration from process.env', async () => {
     setEnv();
     delete process.env.SIREN_NODE_ID;
@@ -76,6 +127,8 @@ describe('config loader', () => {
       zwaveServerHost: '0.0.0.0',
       sessionSecret: 'test-secret-0123456789abcdef0123456789',
       sirenNodeId: null,
+      exitDelaySeconds: 30,
+      entryDelaySeconds: 30,
     });
   });
 

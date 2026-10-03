@@ -14,7 +14,7 @@ Z-Wave USB controller ── zwave-js driver ──┬── alarm engine (arm/d
                                                    └── Home Assistant's built-in "Z-Wave JS" integration
 ```
 
-- **Alarm panel:** `disarmed` → `arming` (30 s exit delay) → `armed_away` / `armed_home`; a breach on an intrusion sensor goes `alarm_pending` (30 s entry delay) → `alarm_triggered`. Life-safety sensors (smoke, CO) trigger immediately in any state.
+- **Alarm panel:** `disarmed` → `arming` (exit delay, 30 s by default) → `armed_away` / `armed_home`; a breach on an intrusion sensor goes `alarm_pending` (entry delay, 30 s by default) → `alarm_triggered`. Life-safety sensors (smoke, CO) trigger immediately in any state.
 - **Roles:** administrator (full control), member (arm/disarm and view), guest (a time-limited or zone-restricted code).
 - **Lockout:** repeated wrong disarm codes lock the account, or, if configured, trigger the alarm.
 
@@ -53,6 +53,8 @@ All configuration is through environment variables (a `.env` file is read by `np
 | `SESSION_SECRET` | yes | none | Secret used to sign dashboard session cookies: at least 32 characters, and not the `.env.example` placeholder (the service refuses to start otherwise). Generate one with `openssl rand -hex 32`. |
 | `ZWAVE_SERVER_HOST` | no | `0.0.0.0` | Interface `zwave-js-server` binds to. It needs to be reachable from Home Assistant but should not be exposed to the internet. |
 | `SIREN_NODE_ID` | no | unset | Z-Wave node id of the paired siren/alert device. Without it the alarm works but nothing sounds locally, and a warning is logged. |
+| `EXIT_DELAY_SECONDS` | no | `30` | Seconds between arming and the panel becoming armed. Whole seconds, 0-600; one value for the whole panel. |
+| `ENTRY_DELAY_SECONDS` | no | `30` | Seconds between a breach on an intrusion sensor and the alarm triggering. Whole seconds, 0-600. Life-safety sensors ignore it. |
 | `LOG_LEVEL` | no | `info` | `debug`, `info`, `warn` or `error`. `debug` adds per-node Z-Wave value changes. |
 
 ## Deployment with Docker
