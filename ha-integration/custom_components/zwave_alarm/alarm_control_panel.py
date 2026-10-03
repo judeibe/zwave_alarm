@@ -18,7 +18,8 @@ the contract's "Failure handling" section (FR-006).
 from __future__ import annotations
 
 import logging
-from typing import Any, Awaitable, Callable
+from collections.abc import Awaitable, Callable
+from typing import Any
 
 from homeassistant.components.alarm_control_panel import (
     AlarmControlPanelEntity,
@@ -52,13 +53,16 @@ async def async_setup_entry(
     async_add_entities([ZwaveAlarmControlPanel(coordinator, entry)])
 
 
-class ZwaveAlarmControlPanel(CoordinatorEntity[ZwaveAlarmCoordinator], AlarmControlPanelEntity):
+class ZwaveAlarmControlPanel(
+    CoordinatorEntity[ZwaveAlarmCoordinator], AlarmControlPanelEntity
+):
     """Represents this service's AlarmPanel singleton as an HA alarm_control_panel."""
 
     _attr_has_entity_name = True
     _attr_name = None
     _attr_supported_features = (
-        AlarmControlPanelEntityFeature.ARM_HOME | AlarmControlPanelEntityFeature.ARM_AWAY
+        AlarmControlPanelEntityFeature.ARM_HOME
+        | AlarmControlPanelEntityFeature.ARM_AWAY
     )
     # POST /api/v1/panel/arm takes no code (contracts/rest-api.md); disarm
     # always requires the caller's own code.
@@ -80,8 +84,14 @@ class ZwaveAlarmControlPanel(CoordinatorEntity[ZwaveAlarmCoordinator], AlarmCont
     @property
     def alarm_state(self) -> AlarmControlPanelState | None:
         """Current alarm state from the coordinator's cached data, or `None` before any snapshot arrives."""
-        panel = self.coordinator.data.panel if self.coordinator.data is not None else None
-        return AlarmControlPanelState(map_panel_mode(panel["mode"])) if panel is not None else None
+        panel = (
+            self.coordinator.data.panel if self.coordinator.data is not None else None
+        )
+        return (
+            AlarmControlPanelState(map_panel_mode(panel["mode"]))
+            if panel is not None
+            else None
+        )
 
     async def async_alarm_arm_away(self, code: str | None = None) -> None:
         """Arm away via `POST /api/v1/panel/arm`."""
@@ -123,7 +133,13 @@ class ZwaveAlarmControlPanel(CoordinatorEntity[ZwaveAlarmCoordinator], AlarmCont
                 "The Z-Wave Alarm service rejected this command in favor of a conflicting request."
             ) from err
         except api.CannotConnect as err:
-            raise HomeAssistantError("Could not reach the Z-Wave Alarm service.") from err
+            raise HomeAssistantError(
+                "Could not reach the Z-Wave Alarm service."
+            ) from err
 
-        current = self.coordinator.data if self.coordinator.data is not None else StreamState(panel=None, zones=[])
+        current = (
+            self.coordinator.data
+            if self.coordinator.data is not None
+            else StreamState(panel=None, zones=[])
+        )
         self.coordinator.async_set_updated_data(merge_panel(current, panel))
