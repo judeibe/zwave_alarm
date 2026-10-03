@@ -2,6 +2,7 @@ import session from 'express-session';
 import type { NextFunction, Request, RequestHandler, Response } from 'express';
 import { config } from '../config/index.js';
 import { ApiError } from '../api/app.js';
+import { ExpiringSessionStore } from './session-store.js';
 import type { UserRole } from './user-repository.js';
 
 /**
@@ -17,6 +18,8 @@ declare module 'express-session' {
   }
 }
 
+const SESSION_MAX_AGE_MS = 12 * 60 * 60 * 1000;
+
 /**
  * express-session configured with SESSION_SECRET from config (FR-009, the
  * native-dashboard auth path per research.md section 8). Mount once via
@@ -28,9 +31,13 @@ export const sessionMiddleware: RequestHandler = session({
   name: 'zwave_alarm.sid',
   resave: false,
   saveUninitialized: false,
+  // Expires abandoned sessions and avoids express-session's non-JSON MemoryStore warning (see session-store.ts).
+  store: new ExpiringSessionStore(),
   cookie: {
     httpOnly: true,
     sameSite: 'lax',
+    // Without an expiry the cookie lives until the browser closes and the server-side entry never expires.
+    maxAge: SESSION_MAX_AGE_MS,
   },
 });
 
