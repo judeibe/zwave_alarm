@@ -6,6 +6,8 @@ const logger = createLogger('zwave/driver');
 
 let driver: Driver | undefined;
 let startPromise: Promise<void> | undefined;
+/** True only once `start()` has resolved, so shutdown never waits on (or destroys) a half-started driver. */
+let started = false;
 
 /**
  * Returns the process-wide zwave-js Driver singleton, constructing it (but
@@ -44,6 +46,9 @@ export function startDriver(): Promise<void> {
   if (!startPromise) {
     logger.info('starting zwave-js driver', { serialPort: config.serialPort });
     startPromise = getDriver().start();
+    startPromise.then(() => {
+      started = true;
+    }, () => {});
     startPromise.catch((err: unknown) => {
       logger.error('zwave-js driver failed to start', {
         serialPort: config.serialPort,
@@ -52,4 +57,20 @@ export function startDriver(): Promise<void> {
     });
   }
   return startPromise;
+}
+
+/**
+ * Releases the serial port and stops the driver, for graceful shutdown. A no-op if the driver was
+ * never finished starting (e.g. no controller was attached, or shutdown arrived mid-start), since
+ * there is then nothing open to release.
+ */
+export async function stopDriver(): Promise<void> {
+  // Still starting (or failed): nothing to release, and the OS closes the port on exit. Waiting on
+  // a start that can take ~9 s to fail would eat the shutdown deadline.
+  if (!driver || !started) {
+    return;
+  }
+  started = false;
+  await driver.destroy();
+  logger.info('zwave-js driver stopped');
 }

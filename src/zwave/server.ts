@@ -7,6 +7,8 @@ const logger = createLogger('zwave/server');
 
 let server: ZwavejsServer | undefined;
 let startPromise: Promise<void> | undefined;
+/** True only once `start()` has resolved. */
+let started = false;
 
 /**
  * Returns the process-wide `ZwavejsServer` singleton, constructing it (but
@@ -49,6 +51,7 @@ export function startZwaveJsServer(): Promise<void> {
     startPromise = startDriver()
       .then(() => getZwaveJsServer().start())
       .then(() => {
+        started = true;
         logger.info('zwave-js-server listening', {
           host: config.zwaveServerHost,
           port: config.zwaveServerPort,
@@ -56,4 +59,14 @@ export function startZwaveJsServer(): Promise<void> {
       });
   }
   return startPromise;
+}
+
+/** Stops serving the zwave-js-server protocol, for graceful shutdown. A no-op if it never started. */
+export async function stopZwaveJsServer(): Promise<void> {
+  if (!server || !started) {
+    return;
+  }
+  started = false;
+  await server.destroy();
+  logger.info('zwave-js-server stopped');
 }

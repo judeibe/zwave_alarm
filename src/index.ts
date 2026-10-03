@@ -9,8 +9,9 @@ import { createWebSocketServer } from './api/ws.js';
 import { createWsVerifyClient } from './api/ws-auth.js';
 import { sessionMiddleware } from './auth/session.js';
 import { attachWsBroadcaster, buildLiveSnapshot } from './api/ws-broadcaster.js';
-import { startZwaveJsServer } from './zwave/server.js';
-import { getDriver } from './zwave/driver.js';
+import { startZwaveJsServer, stopZwaveJsServer } from './zwave/server.js';
+import { getDriver, stopDriver } from './zwave/driver.js';
+import { createShutdown } from './shutdown.js';
 import { AlarmPanelRepository } from './alarm/panel-repository.js';
 import { PanelService } from './alarm/panel-service.js';
 import { Siren } from './alarm/siren.js';
@@ -93,3 +94,33 @@ startZwaveJsServer().catch((err: unknown) => {
     error: err instanceof Error ? err.message : String(err),
   });
 });
+
+// On `docker stop`/Ctrl-C, release everything in order and exit promptly. Without a handler Node as
+// PID 1 ignores SIGTERM and Docker kills it after 10 s. The panel's state is already persisted, so
+// an exit/entry delay in flight is picked up again by `panelService.resume()` on the next start.
+const shutdown = createShutdown([
+  { name: 'stop delay timers', run: () => panelService.stop() },
+  {
+    name: 'close websocket clients',
+    run: () => {
+      for (const client of wss.clients) {
+        client.terminate();
+      }
+      return new Promise<void>((resolve) => wss.close(() => resolve()));
+    },
+  },
+  {
+    name: 'close http server',
+    run: () =>
+      new Promise<void>((resolve, reject) => {
+        httpServer.close((err) => (err ? reject(err) : resolve()));
+        httpServer.closeAllConnections(); // don't wait on keep-alive connections
+      }),
+  },
+  { name: 'stop zwave-js-server', run: stopZwaveJsServer },
+  { name: 'stop zwave-js driver', run: stopDriver },
+  { name: 'close database', run: () => db.close() },
+]);
+for (const signal of ['SIGTERM', 'SIGINT'] as const) {
+  process.on(signal, () => void shutdown(signal));
+}

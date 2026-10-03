@@ -91,6 +91,10 @@ REST endpoints, the WebSocket event stream and the Home Assistant entity contrac
 - The WebSocket push channel requires the same credentials as the REST API at connect time.
 - Dashboard sessions are held in memory and expire after 12 hours; they are lost when the service restarts, so you log in again. Home Assistant tokens are persistent.
 
+## Stopping and restarting
+
+On `SIGTERM` or `SIGINT` (`docker stop`, `docker compose restart`, Ctrl-C) the service closes its WebSocket clients and HTTP server, releases the Z-Wave driver and serial port, closes the database and exits within a second or two (it forces an exit after 8 seconds if something hangs). The alarm's state is already persisted, so a restart during an exit or entry delay picks the countdown up again with the time that remained; a delay that ran out while the service was down escalates immediately. While the service is stopped, nothing is monitoring your sensors.
+
 ## Logging
 
 Every log line is one JSON object (`timestamp`, `level`, `module`, `message`, plus fields) on stdout/stderr: each REST request (method, path, status, duration), WebSocket connects and disconnects, every alarm state transition with its old and new mode and cause, and Z-Wave driver and device events. Output from the underlying `zwave-js` library, if it logs anything itself, is not controlled by this service.
