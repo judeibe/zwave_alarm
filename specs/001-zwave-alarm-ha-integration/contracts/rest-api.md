@@ -18,7 +18,7 @@ Ends the current session.
 
 ### `GET /api/v1/panel`
 
-Returns current `AlarmPanel` state: `mode`, `pendingDelayEndsAt`, `triggeredBy`.
+Returns current `AlarmPanel` state: `mode`, `pendingDelayEndsAt`, `triggeredBy`, `armedMode` (the armed mode the panel is in or heading to; `null` when disarmed) and `disarmedZoneIds` (zones a zone-restricted guest has disarmed while the panel stays armed — see `POST /api/v1/panel/disarm`; empty otherwise).
 
 ### `POST /api/v1/panel/arm`
 
@@ -26,7 +26,13 @@ Body: `{ "mode": "armed_away" | "armed_home" }`. Requires role `administrator` o
 
 ### `POST /api/v1/panel/disarm`
 
-Body: `{ "code": string }` (Guest codes accepted only within their configured window/zone restriction). Clears `alarm_triggered`/`alarm_pending`/`arming` back to `disarmed` and records an `alarm_cleared` or `disarmed` `SecurityEvent`.
+Body: `{ "code": string }` (Guest codes accepted only within their configured expiry window). Clears `alarm_triggered`/`alarm_pending`/`arming` back to `disarmed` and records an `alarm_cleared` or `disarmed` `SecurityEvent`.
+
+**Zone-restricted guests (FR-010a).** A guest created with a `guestZoneId` disarms *only that zone*, never the whole panel. The response is the resulting panel state:
+- The panel `mode` is unchanged and the zone is added to `disarmedZoneIds`. Intrusion breaches in a disarmed zone are ignored (life-safety sensors still trigger immediately, FR-015); the zone is armed again whenever the panel is next fully disarmed or armed.
+- If the current `alarm_pending`/`alarm_triggered` was caused by a breach *in that zone*, it is cleared back to the armed mode (`armedMode`), the rest of the panel staying armed, and an `alarm_cleared` event is recorded with the zone. An alarm caused by any other zone, or by repeated wrong codes, is left as it is.
+- While the panel is disarmed it is a no-op.
+Every successful guest disarm also records a `guest_code_used` `SecurityEvent`. A guest with no `guestZoneId` (expiry only) disarms the whole panel as before.
 
 ## Zones & Sensors
 
@@ -48,7 +54,7 @@ Assign an existing `zwave-js` node to this zone. Body: `{ "zwaveNodeId": number,
 
 ### `POST /api/v1/users` — administrator only
 
-Body: `{ "name": string, "role": "administrator" | "member" | "guest", "code": string, "guestExpiresAt"?: string, "guestZoneId"?: string }`. A `guest` requires `guestExpiresAt` (ISO date string; an epoch-ms number is also accepted) and/or `guestZoneId`.
+Body: `{ "name": string, "role": "administrator" | "member" | "guest", "code": string, "guestExpiresAt"?: string, "guestZoneId"?: string }`. A `guest` requires `guestExpiresAt` (ISO date string; an epoch-ms number is also accepted) and/or `guestZoneId`; a `guestZoneId` that does not refer to an existing zone returns `400`.
 
 **First-run bootstrap:** while no users exist, this endpoint is the one exception to FR-009 and is accepted without credentials, but only with `"role": "administrator"` (otherwise `403`). Once any user exists it requires an administrator session like the rest of this section. This is what lets a fresh install create its first account (see `quickstart.md` §2).
 

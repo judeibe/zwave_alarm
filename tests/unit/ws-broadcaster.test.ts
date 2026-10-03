@@ -123,7 +123,7 @@ describe('ws-broadcaster', () => {
 
     const snapshot = await nextMessage(0);
     expect(snapshot.type).toBe('snapshot');
-    expect(snapshot.panel).toEqual({ mode: 'disarmed', pendingDelayEndsAt: null });
+    expect(snapshot.panel).toEqual({ mode: 'disarmed', pendingDelayEndsAt: null, disarmedZoneIds: [] });
     expect((snapshot.zones as unknown[]).length).toBe(1);
   });
 

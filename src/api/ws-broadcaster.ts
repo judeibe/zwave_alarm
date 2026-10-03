@@ -22,7 +22,7 @@ export function buildLiveSnapshot(deps: Pick<WsBroadcasterDeps, 'panelService' |
   const panel = deps.panelService.getState();
   return {
     type: 'snapshot',
-    panel: { mode: panel.mode, pendingDelayEndsAt: panel.pendingDelayEndsAt },
+    panel: { mode: panel.mode, pendingDelayEndsAt: panel.pendingDelayEndsAt, disarmedZoneIds: panel.disarmedZoneIds },
     zones: deps.zoneRepo.list(),
   };
 }
@@ -65,6 +65,7 @@ export function attachWsBroadcaster(wss: WebSocketServer, deps: WsBroadcasterDep
       type: 'panel.changed',
       mode: panel.mode,
       pendingDelayEndsAt: panel.pendingDelayEndsAt,
+      disarmedZoneIds: panel.disarmedZoneIds,
       triggeredBy: resolveTriggeredBy(deps.eventRepo, panel.triggeredBy),
     });
   });

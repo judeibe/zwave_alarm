@@ -83,6 +83,13 @@ Confirm the bootstrap window has closed: repeating the first `POST /users` now r
    Attempt to disarm with an incorrect code repeatedly: `curl -b t1 -X POST $API/panel/disarm -H 'Content-Type: application/json' -d '{"code":"000000"}'`. The first four attempts return `401`; the fifth (the default threshold) returns `423` and the account stays locked, so even the correct code is refused, and a `lockout` `SecurityEvent` is recorded.
 3. Switch the policy to treat repeated failures as an alarm: `curl -b jar -X PATCH $API/lockout-policy -H 'Content-Type: application/json' -d '{"onThresholdExceeded":"trigger_alarm"}'` (any of `failedAttemptThreshold` 1-100, `cooldownSeconds` 1-86400 and `onThresholdExceeded` may be sent). Log in as the second member (`curl -c t2 …` with `tester2`) and repeat step 2 with `-b t2`: the fifth failure instead returns `200` with the panel in `alarm_triggered`. Clear it with the administrator's code, and set the policy back to `lockout` if you want the default.
 
+## 6b. Validate zone-restricted guests (FR-010a)
+
+1. Create a second zone ("Upstairs") and a guest restricted to "Front Door": `curl -b jar -X POST $API/users -H 'Content-Type: application/json' -d '{"name":"Sitter","role":"guest","code":"guest1","guestZoneId":"<Front Door zoneId>"}'`. An unknown `guestZoneId` returns `400`.
+2. Put the panel into an armed state (§3 step 2), log in as the guest (`curl -c g -X POST $API/auth/login … '{"code":"guest1"}'`) and disarm: `curl -b g -X POST $API/panel/disarm -H 'Content-Type: application/json' -d '{"code":"guest1"}'`. The response keeps `mode` armed and lists the zone in `disarmedZoneIds`; `GET $API/panel` as an administrator agrees, and `GET $API/events` shows a `disarmed` event for that zone plus a `guest_code_used` event.
+3. **(hardware)** Breach a sensor in the Front Door zone: the panel ignores it. Breach one in Upstairs: it goes `alarm_pending` as normal. A smoke sensor in either zone still triggers immediately.
+4. Fully disarm with the administrator's code, then arm again: Front Door is protected again (`disarmedZoneIds` is empty).
+
 ## 7. Input validation and rate limiting (Phase 5 hardening)
 
 1. Malformed input is rejected with `400` in the standard error format on every endpoint, e.g. `curl -b jar -X POST $API/panel/arm -H 'Content-Type: application/json' -d '{"mode":"nonsense"}'` → `{"error":{"code":"bad_request","message":"Invalid request body: …"}}`; likewise `GET $API/events?limit=abc`.

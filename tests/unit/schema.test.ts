@@ -27,13 +27,14 @@ describe('db schema', () => {
   it('records the applied migration and is idempotent on re-run', () => {
     const db = createDatabase(':memory:');
     const applied = db.prepare('SELECT id FROM schema_migrations').all();
-    expect(applied).toEqual([{ id: '001_init' }, { id: '002_panel_armed_mode' }]);
+    expect(applied).toEqual([{ id: '001_init' }, { id: '002_panel_armed_mode' }, { id: '003_panel_disarmed_zones' }]);
 
     // Running again must not error (CREATE TABLE would fail if re-applied) or duplicate rows.
     expect(() => runMigrations(db)).not.toThrow();
     expect(db.prepare('SELECT id FROM schema_migrations').all()).toEqual([
       { id: '001_init' },
       { id: '002_panel_armed_mode' },
+      { id: '003_panel_disarmed_zones' },
     ]);
   });
 

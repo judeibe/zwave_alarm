@@ -102,6 +102,18 @@ const MIGRATIONS: Migration[] = [
         CHECK (armed_mode IN ('armed_away', 'armed_home'));
     `,
   },
+  {
+    // Zones a zone-restricted guest has disarmed while the panel as a whole stays armed (FR-010a).
+    // Cleared whenever the panel is fully disarmed or armed again.
+    id: '003_panel_disarmed_zones',
+    sql: `
+      CREATE TABLE panel_disarmed_zones (
+        zone_id TEXT PRIMARY KEY REFERENCES zones(id) ON DELETE CASCADE,
+        disarmed_at INTEGER NOT NULL,
+        disarmed_by TEXT REFERENCES users(id) ON DELETE SET NULL
+      );
+    `,
+  },
 ];
 
 function ensureMigrationsTable(db: Database.Database): void {

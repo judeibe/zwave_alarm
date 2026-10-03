@@ -9,13 +9,13 @@ On connect, the server sends one `snapshot` event with the full current state, t
 ### `snapshot`
 
 ```json
-{ "type": "snapshot", "panel": { "mode": "armed_away", "pendingDelayEndsAt": null }, "zones": [ /* Zone + SensorDevice[] */ ] }
+{ "type": "snapshot", "panel": { "mode": "armed_away", "pendingDelayEndsAt": null, "disarmedZoneIds": [] }, "zones": [ /* Zone + SensorDevice[] */ ] }
 ```
 
 ### `panel.changed`
 
 ```json
-{ "type": "panel.changed", "mode": "alarm_triggered", "pendingDelayEndsAt": null, "triggeredBy": { "sensorId": "...", "zoneId": "..." } }
+{ "type": "panel.changed", "mode": "alarm_triggered", "pendingDelayEndsAt": null, "disarmedZoneIds": [], "triggeredBy": { "sensorId": "...", "zoneId": "..." } }
 ```
 
 ### `sensor.changed`

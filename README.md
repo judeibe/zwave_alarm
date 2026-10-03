@@ -15,7 +15,7 @@ Z-Wave USB controller ── zwave-js driver ──┬── alarm engine (arm/d
 ```
 
 - **Alarm panel:** `disarmed` → `arming` (exit delay, 30 s by default) → `armed_away` / `armed_home`; a breach on an intrusion sensor goes `alarm_pending` (entry delay, 30 s by default) → `alarm_triggered`. Life-safety sensors (smoke, CO) trigger immediately in any state.
-- **Roles:** administrator (full control), member (arm/disarm and view), guest (a time-limited or zone-restricted code).
+- **Roles:** administrator (full control), member (arm/disarm and view), guest (a time-limited code, or one restricted to a single zone: it disarms only that zone and the rest of the panel stays armed).
 - **Lockout:** repeated wrong disarm codes lock the account, or, if configured, trigger the alarm.
 
 ## Requirements

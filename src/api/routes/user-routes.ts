@@ -87,6 +87,9 @@ export function createUserRouter({ userRepo }: UserRouteDeps): Router {
       if (err instanceof Error && err.message.includes('guest')) {
         throw new ApiError(400, 'bad_request', err.message);
       }
+      if (err instanceof Error && err.message.includes('FOREIGN KEY')) {
+        throw new ApiError(400, 'bad_request', '"guestZoneId" does not refer to an existing zone.');
+      }
       throw err;
     }
   });

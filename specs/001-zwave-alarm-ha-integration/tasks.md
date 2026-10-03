@@ -145,6 +145,7 @@ Single project (per `plan.md`): `src/`, `tests/` at repository root, plus `ha-in
 - [X] T049 [US1] Resume persisted arming/alarm_pending timers and re-sound the siren after a restart (SC-006, Edge Cases): migration 002 (`armed_mode`) in `src/db/schema.ts`, `PanelService.resume()` in `src/alarm/panel-service.ts`, driver-ready-safe `Siren.sync()` in `src/alarm/siren.ts`, wired in `src/index.ts`
 - [X] T050 [US1] Configurable global exit/entry delays (FR-004): `EXIT_DELAY_SECONDS` / `ENTRY_DELAY_SECONDS` (default 30, 0-600) in `src/config/index.ts`, passed to `PanelService` in `src/index.ts`; documented in README and `.env.example`. One value for the whole panel (per-zone delays are out of scope)
 - [X] T051 [US1] Lockout policy endpoints (FR-016): `GET`/`PATCH /api/v1/lockout-policy` (administrator only, zod-validated) in `src/api/routes/lockout-policy-routes.ts`, `LockoutService.getPolicy`/`updatePolicy`; `contracts/rest-api.md` and `quickstart.md` §6 updated to use it instead of editing the database
+- [X] T052 [US1] Zone-restricted guests (FR-010a): migration 003 (`panel_disarmed_zones`), `PanelService.disarmZone()` (disarms only the guest's zone; breaches there are ignored, life-safety is not; clears an alarm that zone caused; reset on full disarm / re-arm), `guest_code_used` event and zone-only disarm in `src/api/routes/panel-routes.ts`, `disarmedZoneIds` on `GET /panel` and the WebSocket snapshot/`panel.changed`, dashboard zone badge, unknown `guestZoneId` -> `400`
 
 ---
 

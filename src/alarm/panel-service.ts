@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
 import { AlarmCommandDispatcher, type AlarmCommandRequest, type CommandSource } from './dispatcher.js';
-import { AlarmPanelRepository, type AlarmPanel, type AlarmPanelUpdate, type ArmedMode } from './panel-repository.js';
+import { AlarmPanelRepository, type AlarmMode, type AlarmPanel, type AlarmPanelUpdate, type ArmedMode } from './panel-repository.js';
 import { EventRepository } from '../events/event-repository.js';
 import { createLogger } from '../config/logger.js';
 import type { SensorDevice } from '../db/repositories/sensor-repository.js';
@@ -23,6 +23,8 @@ export interface PanelCommandOptions {
    * can be told "cleared, and by whom" (User Story 3's second acceptance scenario in spec.md).
    */
   clearedBy?: string | null;
+  /** For `disarmZone`: a display name for the zone, recorded in the SecurityEvent details. */
+  zoneName?: string | null;
 }
 
 export type SensorBreachInput = Pick<SensorDevice, 'id' | 'zoneId' | 'category'>;
@@ -37,13 +39,16 @@ const DEFAULT_EXIT_DELAY_MS = 30_000;
 const DEFAULT_ENTRY_DELAY_MS = 30_000;
 
 interface CommandContext {
+  /** Set only for a zone-restricted disarm (`disarm_zone`). */
+  zoneId: string | null;
+  zoneName: string | null;
   /** `system` is a delay resumed after a restart, where the original requester is no longer known. */
   source: CommandSource | 'system';
   sourceUserId: string | null;
   clearedBy: string | null;
 }
 
-type PanelCommand = 'arm_away' | 'arm_home' | 'disarm';
+type PanelCommand = 'arm_away' | 'arm_home' | 'disarm' | 'disarm_zone';
 
 /** Why a transition happened, logged alongside the old/new mode (e.g. `{ cause: 'arm_command', source: 'native' }`). */
 type TransitionCause = { cause: string } & Record<string, unknown>;
@@ -107,6 +112,17 @@ export class PanelService extends EventEmitter {
     return this.submit('disarm', options);
   }
 
+  /**
+   * A zone-restricted guest's disarm (FR-010a): disarms only `zoneId`, leaving the rest of the
+   * panel armed. Intrusion breaches in that zone are ignored until the panel is next fully
+   * disarmed or armed again, and an alarm that a breach *in that zone* caused is cleared back to
+   * the armed mode. An alarm from anywhere else is untouched, and life-safety sensors still
+   * trigger (FR-015). A no-op while the panel is disarmed.
+   */
+  disarmZone(zoneId: string, options: PanelCommandOptions): Promise<AlarmPanel> {
+    return this.submit('disarm_zone', { ...options, zoneId });
+  }
+
   /** Intrusion sensors are armed-state-gated (FR-003); life-safety sensors always trigger immediately (FR-015). */
   reportSensorBreach(sensor: SensorBreachInput): AlarmPanel {
     if (sensor.category === 'life-safety') {
@@ -161,6 +177,7 @@ export class PanelService extends EventEmitter {
         // A row written before `armed_mode` existed: the target is unknowable. Fail to the state
         // the user can see and re-arm from rather than guessing.
         logger.warn('arming interrupted by a restart with no recorded target mode; falling back to disarmed');
+        this.panelRepo.clearDisarmedZones();
         this.commitPanel(
           { mode: 'disarmed', pendingDelayEndsAt: null, triggeredBy: null, armedMode: null },
           { cause: 'restart_recovery' },
@@ -168,7 +185,7 @@ export class PanelService extends EventEmitter {
         return;
       }
       const target = panel.armedMode;
-      const context: CommandContext = { source: 'system', sourceUserId: null, clearedBy: null };
+      const context: CommandContext = { zoneId: null, zoneName: null, source: 'system', sourceUserId: null, clearedBy: null };
       this.clearPendingTimer();
       this.pendingTimer = setTimeout(() => this.completeArming(target, context), remainingMs);
     } else if (panel.mode === 'alarm_pending') {
@@ -186,13 +203,15 @@ export class PanelService extends EventEmitter {
     this.clearPendingTimer();
   }
 
-  private submit(command: PanelCommand, options: PanelCommandOptions): Promise<AlarmPanel> {
+  private submit(command: PanelCommand, options: PanelCommandOptions & { zoneId?: string | null }): Promise<AlarmPanel> {
     const request: AlarmCommandRequest = {
       command,
       source: options.source,
       requestedAt: options.requestedAt ?? Date.now(),
     };
     this.commandContext.set(request, {
+      zoneId: options.zoneId ?? null,
+      zoneName: options.zoneName ?? null,
       source: options.source,
       sourceUserId: options.sourceUserId ?? null,
       clearedBy: options.clearedBy ?? null,
@@ -202,6 +221,8 @@ export class PanelService extends EventEmitter {
 
   private handleCommand(request: AlarmCommandRequest): AlarmPanel {
     const context = this.commandContext.get(request) ?? {
+      zoneId: null,
+      zoneName: null,
       source: request.source,
       sourceUserId: null,
       clearedBy: null,
@@ -215,6 +236,8 @@ export class PanelService extends EventEmitter {
         return this.beginArming('armed_home', context);
       case 'disarm':
         return this.applyDisarm(context);
+      case 'disarm_zone':
+        return this.applyZoneDisarm(context);
       default:
         throw new PanelStateError(`Unknown panel command: ${request.command}`);
     }
@@ -227,6 +250,7 @@ export class PanelService extends EventEmitter {
     }
 
     this.clearPendingTimer();
+    this.panelRepo.clearDisarmedZones(); // a fresh arming covers every zone again
     const panel = this.commitPanel(
       {
         mode: 'arming',
@@ -263,6 +287,7 @@ export class PanelService extends EventEmitter {
     }
 
     this.clearPendingTimer();
+    this.panelRepo.clearDisarmedZones();
     const wasAlarm = current.mode === 'alarm_pending' || current.mode === 'alarm_triggered';
     const panel = this.commitPanel(
       { mode: 'disarmed', pendingDelayEndsAt: null, triggeredBy: null, armedMode: null },
@@ -283,10 +308,72 @@ export class PanelService extends EventEmitter {
     return panel;
   }
 
+  private applyZoneDisarm(context: CommandContext): AlarmPanel {
+    const zoneId = context.zoneId;
+    if (zoneId === null) {
+      throw new PanelStateError('A zone is required for a zone-restricted disarm.');
+    }
+    const current = this.panelRepo.getPanel();
+    if (current.mode === 'disarmed') {
+      return current; // Nothing is armed, so there is nothing to disarm in this zone.
+    }
+
+    this.panelRepo.addDisarmedZone(zoneId, context.sourceUserId);
+
+    const alarming = current.mode === 'alarm_pending' || current.mode === 'alarm_triggered';
+    const alarmZoneId =
+      alarming && current.triggeredBy ? (this.eventRepo.findById(current.triggeredBy)?.relatedZoneId ?? null) : null;
+    const label = context.zoneName ? `Zone "${context.zoneName}"` : 'The guest\'s zone';
+    const who = context.clearedBy ? ` by ${context.clearedBy}` : '';
+
+    if (alarming && alarmZoneId === zoneId) {
+      // The breach that raised this alarm was in the guest's own zone, so the guest can stand it
+      // down. The panel goes back to the armed mode it was in (or disarmed, if a life-safety
+      // sensor raised the alarm while the panel was disarmed).
+      this.clearPendingTimer();
+      const next: AlarmMode = current.armedMode ?? 'disarmed';
+      if (next === 'disarmed') {
+        this.panelRepo.clearDisarmedZones();
+      }
+      const panel = this.commitPanel(
+        { mode: next, pendingDelayEndsAt: null, triggeredBy: null },
+        { cause: 'zone_alarm_cleared', zoneId, source: context.source, sourceUserId: context.sourceUserId },
+      );
+      this.eventRepo.record({
+        type: 'alarm_cleared',
+        source: eventSource(context.source),
+        sourceUserId: context.sourceUserId,
+        relatedZoneId: zoneId,
+        details: `${label} alarm cleared${who}; the rest of the panel stays armed`,
+      });
+      return panel;
+    }
+
+    this.eventRepo.record({
+      type: 'disarmed',
+      source: eventSource(context.source),
+      sourceUserId: context.sourceUserId,
+      relatedZoneId: zoneId,
+      details: `${label} disarmed${who}; the rest of the panel stays armed`,
+    });
+    logger.info('zone disarmed', { zoneId, sourceUserId: context.sourceUserId, panelMode: current.mode });
+    // The mode didn't change, but clients need to learn which zones are now disarmed.
+    const panel = this.panelRepo.getPanel();
+    this.emit('panel_changed', panel);
+    return panel;
+  }
+
   private reportIntrusionBreach(sensor: SensorBreachInput): AlarmPanel {
     const current = this.panelRepo.getPanel();
     if (current.mode !== 'armed_away' && current.mode !== 'armed_home') {
       return current; // Intrusion sensors are only monitored while armed (FR-003).
+    }
+    if (current.disarmedZoneIds.includes(sensor.zoneId)) {
+      logger.info('intrusion breach ignored: its zone was disarmed by a zone-restricted guest', {
+        sensorId: sensor.id,
+        zoneId: sensor.zoneId,
+      });
+      return current;
     }
 
     this.clearPendingTimer();

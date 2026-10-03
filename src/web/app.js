@@ -11,7 +11,7 @@ const LOW_BATTERY_THRESHOLD_PERCENT = 20;
 
 const state = {
   user: null,
-  panel: { mode: 'disarmed', pendingDelayEndsAt: null },
+  panel: { mode: 'disarmed', pendingDelayEndsAt: null, disarmedZoneIds: [] },
   zones: [],
 };
 
@@ -126,7 +126,10 @@ function renderZones() {
                   `<li class="sensor-row"><span class="sensor-name">${sensor.name} <em>(${sensor.category})</em></span>${sensorBadges(sensor)}</li>`,
               )
               .join('');
-      return `<li class="zone-card"><h3>${zone.name}</h3><ul>${sensorRows}</ul></li>`;
+      // A zone-restricted guest can disarm just their zone while the panel stays armed (FR-010a).
+      const zoneDisarmed = (state.panel.disarmedZoneIds ?? []).includes(zone.id);
+      const zoneBadge = zoneDisarmed ? ' <span class="badge badge-fault">zone disarmed</span>' : '';
+      return `<li class="zone-card"><h3>${zone.name}${zoneBadge}</h3><ul>${sensorRows}</ul></li>`;
     })
     .join('');
 }
@@ -167,8 +170,13 @@ function connectSocket() {
         renderZones();
         break;
       case 'panel.changed':
-        state.panel = { mode: message.mode, pendingDelayEndsAt: message.pendingDelayEndsAt };
+        state.panel = {
+          mode: message.mode,
+          pendingDelayEndsAt: message.pendingDelayEndsAt,
+          disarmedZoneIds: message.disarmedZoneIds ?? [],
+        };
         renderPanel();
+        renderZones(); // the zone cards show which zones are disarmed
         break;
       case 'sensor.changed':
         applySensorPatch(message.sensorId, { currentState: message.currentState });

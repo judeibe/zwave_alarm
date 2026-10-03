@@ -17,6 +17,11 @@
 - Q: Do all household members share equal permissions, or are there distinct roles? → A: Three tiers — Administrator (full control incl. device/user management), Member (arm/disarm + view status), and Guest (a time-limited or single-zone-restricted disarm code).
 - Q: Should this feature's scope explicitly exclude a dedicated mobile app, camera/video integration, and professional monitoring dispatch? → A: Yes — those are out of scope for this feature and deferred to future work.
 
+### Session 2026-10-03
+
+- Q: What does a "single-zone-restricted" guest disarm code do — disarm the whole panel only when the guest's zone is involved, or disarm just their zone? → A: It disarms only that zone. When a guest restricted to, say, the downstairs disarms the panel, only that zone is disarmed; the rest stays armed. Breaches in the disarmed zone are ignored (life-safety sensors still trigger), and a pending or triggered alarm that a breach in that zone caused is cleared; an alarm from another zone is not. The zone is protected again when the panel is next fully disarmed or armed.
+- Q: Are the exit/entry delays set per zone? → A: No, one global value for the whole panel, set by the administrator who deploys the service (`EXIT_DELAY_SECONDS` / `ENTRY_DELAY_SECONDS`, default 30).
+
 ## User Scenarios & Testing *(mandatory)*
 
 ### User Story 1 - Arm, disarm, and monitor the alarm from the native system (Priority: P1)

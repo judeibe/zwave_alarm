@@ -7,11 +7,15 @@ import { CommandRejectedError, type CommandSource } from '../../alarm/dispatcher
 import { PanelStateError, type ArmMode, type PanelService } from '../../alarm/panel-service.js';
 import { verifyCredential, type UserRepository } from '../../auth/user-repository.js';
 import type { LockoutService } from '../../auth/lockout-service.js';
+import type { EventRepository } from '../../events/event-repository.js';
+import type { ZoneRepository } from '../../db/repositories/zone-repository.js';
 
 export interface PanelRouteDeps {
   panelService: PanelService;
   userRepo: UserRepository;
   lockoutService: LockoutService;
+  eventRepo: EventRepository;
+  zoneRepo: ZoneRepository;
 }
 
 function commandSource(req: Request): CommandSource {
@@ -39,7 +43,7 @@ function callerUserId(req: Request): string | undefined {
  * the code being tested. See auth-routes.ts's login handler for why that
  * doesn't extend to login itself.
  */
-export function createPanelRouter({ panelService, userRepo, lockoutService }: PanelRouteDeps): Router {
+export function createPanelRouter({ panelService, userRepo, lockoutService, eventRepo, zoneRepo }: PanelRouteDeps): Router {
   const router = Router();
 
   router.get('/panel', requireAuth, requireRole('administrator', 'member'), (_req, res) => {
@@ -109,6 +113,30 @@ export function createPanelRouter({ panelService, userRepo, lockoutService }: Pa
       userRepo.resetFailedAttempts(user.id);
       try {
         const source = commandSource(req);
+
+        if (user.role === 'guest') {
+          // FR-011: a guest code being used is itself a security-relevant event.
+          eventRepo.record({
+            type: 'guest_code_used',
+            source: 'user',
+            sourceUserId: user.id,
+            relatedZoneId: user.guestZoneId,
+            details: user.guestZoneId === null ? 'Guest code used to disarm' : 'Zone-restricted guest code used to disarm',
+          });
+        }
+        if (user.role === 'guest' && user.guestZoneId !== null) {
+          // FR-010a: a zone-restricted guest only disarms their own zone, never the whole panel.
+          const zoneName = zoneRepo.list().find((zone) => zone.id === user.guestZoneId)?.name ?? null;
+          const panel = await panelService.disarmZone(user.guestZoneId, {
+            source,
+            sourceUserId: user.id,
+            clearedBy: user.name,
+            zoneName,
+          });
+          res.status(200).json(panel);
+          return;
+        }
+
         const panel = await panelService.disarm({
           source,
           sourceUserId: user.id,
