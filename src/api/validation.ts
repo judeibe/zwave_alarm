@@ -45,6 +45,16 @@ export const createUserBodySchema = z.object({
 /** `POST /api/v1/ha-links` body. */
 export const createHaLinkBodySchema = z.object({ label: name });
 
+/** `PATCH /api/v1/lockout-policy` body: any subset of the policy, but at least one field. */
+export const lockoutPolicyUpdateSchema = z
+  .object({
+    failedAttemptThreshold: z.number().int().min(1).max(100),
+    cooldownSeconds: z.number().int().min(1).max(86_400),
+    onThresholdExceeded: z.enum(['lockout', 'trigger_alarm']),
+  })
+  .partial()
+  .refine((body) => Object.keys(body).length > 0, 'must include at least one field to change');
+
 /** `GET /api/v1/events` query string (`since` is epoch-ms, `limit` a positive integer). */
 // `z.coerce.number()` alone would turn an empty `?since=` into 0, so require a non-empty string
 // first; `z.number()` then rejects the NaN that a non-numeric string converts to.

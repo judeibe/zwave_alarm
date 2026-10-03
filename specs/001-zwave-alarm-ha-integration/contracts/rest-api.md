@@ -54,6 +54,18 @@ Body: `{ "name": string, "role": "administrator" | "member" | "guest", "code": s
 
 ### `DELETE /api/v1/users/{userId}` — administrator only
 
+## Lockout Policy
+
+Administrator only (FR-010a). Controls what happens after repeated wrong disarm codes (FR-016). The policy applies to the next failed attempt; failure counts already accrued and locks already in force are unchanged.
+
+### `GET /api/v1/lockout-policy`
+
+Returns `{ "failedAttemptThreshold": number, "cooldownSeconds": number, "onThresholdExceeded": "lockout" | "trigger_alarm" }`. Defaults: `5`, `300`, `"lockout"`.
+
+### `PATCH /api/v1/lockout-policy`
+
+Body: any non-empty subset of the three fields above — `failedAttemptThreshold` (integer 1-100), `cooldownSeconds` (integer 1-86400), `onThresholdExceeded`. Returns the resulting policy. An empty body, an out-of-range or wrong-typed value returns `400`. In `lockout` mode the threshold-th consecutive wrong code locks the caller's account for `cooldownSeconds` (`423`) and records a `lockout` event; in `trigger_alarm` mode it instead raises `alarm_triggered` (`200` with the panel state).
+
 ## Events
 
 ### `GET /api/v1/events?since={timestamp}&limit={n}`

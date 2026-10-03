@@ -73,17 +73,15 @@ Confirm the bootstrap window has closed: repeating the first `POST /users` now r
 ## 6. Validate life-safety gating and lockout (Clarifications, FR-015/FR-016)
 
 1. **(hardware)** While `disarmed`, simulate a smoke sensor triggering (`category: life-safety`) and confirm the panel enters `alarm_triggered` immediately, with no entry delay.
-2. Attempt to disarm with an incorrect code repeatedly (with a logged-in session). The first four attempts return `401`; the fifth (the default threshold) returns `423` and the account stays locked — even the correct code is refused — and a `lockout` `SecurityEvent` is recorded.
-3. There is no REST endpoint for the lockout policy; to flip `LockoutPolicy.onThresholdExceeded` to `trigger_alarm` (and clear the lock from step 2) edit the database directly, then repeat step 2 and confirm the fifth failure instead returns `200` with the panel in `alarm_triggered`:
+2. Check the policy as an administrator: `curl -b jar $API/lockout-policy` returns `{"failedAttemptThreshold":5,"cooldownSeconds":300,"onThresholdExceeded":"lockout"}`. Create two members so the administrator is never the one locked out, and log in as the first:
 
    ```bash
-   docker exec zwave-alarm node -e '
-     const d = new (require("better-sqlite3"))("/app/data/alarm.db");
-     d.prepare("UPDATE lockout_policy SET on_threshold_exceeded = ? WHERE id = ?").run("trigger_alarm", "policy");
-     d.prepare("UPDATE users SET locked_until = NULL, failed_attempt_count = 0").run();'
+   for n in 1 2; do curl -b jar -X POST $API/users -H 'Content-Type: application/json' -d "{\"name\":\"Tester $n\",\"role\":\"member\",\"code\":\"tester$n\"}"; done
+   curl -c t1 -X POST $API/auth/login -H 'Content-Type: application/json' -d '{"code":"tester1"}'
    ```
 
-   (Bare metal: the same `UPDATE`s with `sqlite3 "$DB_PATH"`. The `lockout_policy` row is created on the first failed attempt, so run step 2 first.)
+   Attempt to disarm with an incorrect code repeatedly: `curl -b t1 -X POST $API/panel/disarm -H 'Content-Type: application/json' -d '{"code":"000000"}'`. The first four attempts return `401`; the fifth (the default threshold) returns `423` and the account stays locked, so even the correct code is refused, and a `lockout` `SecurityEvent` is recorded.
+3. Switch the policy to treat repeated failures as an alarm: `curl -b jar -X PATCH $API/lockout-policy -H 'Content-Type: application/json' -d '{"onThresholdExceeded":"trigger_alarm"}'` (any of `failedAttemptThreshold` 1-100, `cooldownSeconds` 1-86400 and `onThresholdExceeded` may be sent). Log in as the second member (`curl -c t2 …` with `tester2`) and repeat step 2 with `-b t2`: the fifth failure instead returns `200` with the panel in `alarm_triggered`. Clear it with the administrator's code, and set the policy back to `lockout` if you want the default.
 
 ## 7. Input validation and rate limiting (Phase 5 hardening)
 

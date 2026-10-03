@@ -1,6 +1,6 @@
 import type { User } from './user-repository.js';
 import { UserRepository } from './user-repository.js';
-import { LockoutPolicyRepository } from './lockout-policy-repository.js';
+import { LockoutPolicyRepository, type LockoutPolicy, type LockoutPolicyUpdate } from './lockout-policy-repository.js';
 import { EventRepository } from '../events/event-repository.js';
 import { PanelService } from '../alarm/panel-service.js';
 import { createLogger } from '../config/logger.js';
@@ -30,6 +30,23 @@ export class LockoutService {
     private readonly eventRepo: EventRepository,
     private readonly panelService: PanelService,
   ) {}
+
+  /** The current failed-attempt policy (FR-016). */
+  getPolicy(): LockoutPolicy {
+    return this.policyRepo.getPolicy();
+  }
+
+  /**
+   * Changes the failed-attempt policy (FR-016: an administrator can choose between lockout and
+   * treating repeated failures as an alarm). Takes effect from the next failed attempt; counts
+   * already accrued and locks already in force are left as they are.
+   */
+  updatePolicy(changes: LockoutPolicyUpdate): LockoutPolicy {
+    const previous = this.policyRepo.getPolicy();
+    const next = this.policyRepo.updatePolicy(changes);
+    logger.warn('lockout policy changed', { from: previous, to: next });
+    return next;
+  }
 
   /** True while `user.lockedUntil` is set and still in the future. */
   isLocked(user: Pick<User, 'lockedUntil'>): boolean {

@@ -18,6 +18,7 @@ import { createZoneRouter } from './routes/zone-routes.js';
 import { createUserRouter } from './routes/user-routes.js';
 import { createEventRouter } from './routes/event-routes.js';
 import { createHaLinkRouter } from './routes/ha-link-routes.js';
+import { createLockoutPolicyRouter } from './routes/lockout-policy-routes.js';
 
 /**
  * Thrown by route handlers to produce the `{ error: { code, message } }`
@@ -142,6 +143,7 @@ export function createApp(deps?: AppDeps): Express {
     app.use('/api/v1', createUserRouter(routeDeps));
     app.use('/api/v1', createEventRouter(routeDeps));
     app.use('/api/v1', createHaLinkRouter(routeDeps));
+    app.use('/api/v1', createLockoutPolicyRouter(routeDeps));
   }
 
   // eslint-disable-next-line @typescript-eslint/no-unused-vars -- Express only recognizes error middleware with all four parameters present.
