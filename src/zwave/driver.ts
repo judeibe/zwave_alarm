@@ -42,7 +42,14 @@ export function getDriver(): Driver {
  */
 export function startDriver(): Promise<void> {
   if (!startPromise) {
+    logger.info('starting zwave-js driver', { serialPort: config.serialPort });
     startPromise = getDriver().start();
+    startPromise.catch((err: unknown) => {
+      logger.error('zwave-js driver failed to start', {
+        serialPort: config.serialPort,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
   }
   return startPromise;
 }

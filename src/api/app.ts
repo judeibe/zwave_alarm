@@ -11,6 +11,7 @@ import type { PanelService } from '../alarm/panel-service.js';
 import type { EventRepository } from '../events/event-repository.js';
 import type { HaLinkRepository } from '../db/repositories/ha-link-repository.js';
 import { configureHaLinkAuth } from '../auth/token.js';
+import { requestLogger } from './request-logger.js';
 import { createAuthRouter } from './routes/auth-routes.js';
 import { createPanelRouter } from './routes/panel-routes.js';
 import { createZoneRouter } from './routes/zone-routes.js';
@@ -102,6 +103,9 @@ export interface AppDeps {
 export function createApp(deps?: AppDeps): Express {
   const app = express();
 
+  // Scoped to /api so the dashboard's static assets don't flood the log; mounted before the body
+  // parser so a request rejected for malformed JSON is still recorded.
+  app.use('/api', requestLogger);
   app.use(express.json());
 
   app.get('/healthz', (_req: Request, res: Response) => {

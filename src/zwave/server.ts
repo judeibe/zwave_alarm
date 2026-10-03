@@ -46,7 +46,14 @@ export function getZwaveJsServer(): ZwavejsServer {
  */
 export function startZwaveJsServer(): Promise<void> {
   if (!startPromise) {
-    startPromise = startDriver().then(() => getZwaveJsServer().start());
+    startPromise = startDriver()
+      .then(() => getZwaveJsServer().start())
+      .then(() => {
+        logger.info('zwave-js-server listening', {
+          host: config.zwaveServerHost,
+          port: config.zwaveServerPort,
+        });
+      });
   }
   return startPromise;
 }

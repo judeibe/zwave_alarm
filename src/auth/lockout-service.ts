@@ -3,6 +3,9 @@ import { UserRepository } from './user-repository.js';
 import { LockoutPolicyRepository } from './lockout-policy-repository.js';
 import { EventRepository } from '../events/event-repository.js';
 import { PanelService } from '../alarm/panel-service.js';
+import { createLogger } from '../config/logger.js';
+
+const logger = createLogger('auth/lockout');
 
 export interface RecordFailedAttemptResult {
   user: User;
@@ -57,12 +60,21 @@ export class LockoutService {
     }
 
     if (policy.onThresholdExceeded === 'trigger_alarm') {
+      logger.warn('failed disarm-attempt threshold exceeded; triggering alarm', {
+        userId,
+        failedAttempts: user.failedAttemptCount,
+      });
       this.panelService.triggerAlarm({
         details: `Failed disarm-attempt threshold exceeded for user ${userId}`,
       });
       return { user, locked: false, alarmTriggered: true };
     }
 
+    logger.warn('account locked after repeated failed disarm attempts', {
+      userId,
+      failedAttempts: user.failedAttemptCount,
+      cooldownSeconds: policy.cooldownSeconds,
+    });
     const lockedUser = this.userRepo.lock(userId, policy.cooldownSeconds);
     this.eventRepo.record({ type: 'lockout', source: 'system', sourceUserId: userId });
     return { user: lockedUser, locked: true, alarmTriggered: false };

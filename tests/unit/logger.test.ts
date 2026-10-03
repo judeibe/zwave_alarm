@@ -4,6 +4,7 @@ import { createLogger } from '../../src/config/logger.js';
 describe('createLogger', () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
   });
 
   it('writes info/warn/debug through console.log with the module tag and message', () => {
@@ -40,6 +41,7 @@ describe('createLogger', () => {
   });
 
   it('writes warn and debug through console.log, distinguished by the level field', () => {
+    vi.stubEnv('LOG_LEVEL', 'debug');
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
     const logger = createLogger('test/module');
 
@@ -65,5 +67,32 @@ describe('createLogger', () => {
     const second = JSON.parse(logSpy.mock.calls[1][0] as string) as Record<string, unknown>;
     expect(first.module).toBe('module/a');
     expect(second.module).toBe('module/b');
+  });
+
+  it('drops debug entries by default but keeps info and above', () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const logger = createLogger('test/module');
+
+    logger.debug('noise');
+    logger.info('kept');
+    logger.error('kept too');
+
+    expect(logSpy).toHaveBeenCalledTimes(1);
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('honors LOG_LEVEL and falls back to info for an unrecognized value', () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const logger = createLogger('test/module');
+
+    vi.stubEnv('LOG_LEVEL', 'warn');
+    logger.info('dropped');
+    logger.warn('kept');
+    expect(logSpy).toHaveBeenCalledTimes(1);
+
+    vi.stubEnv('LOG_LEVEL', 'verbose');
+    logger.info('kept under fallback');
+    expect(logSpy).toHaveBeenCalledTimes(2);
   });
 });

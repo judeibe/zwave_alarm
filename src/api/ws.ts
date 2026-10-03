@@ -1,4 +1,8 @@
 import { WebSocketServer, type ServerOptions, type WebSocket } from 'ws';
+import type { IncomingMessage } from 'node:http';
+import { createLogger } from '../config/logger.js';
+
+const logger = createLogger('api/ws');
 
 /**
  * Stub `snapshot` payload shape from contracts/websocket-events.md, used when
@@ -48,7 +52,16 @@ function isPingMessage(value: unknown): boolean {
  * tests/unit/ws-broadcaster.test.ts.
  */
 export function registerConnectionHandlers(wss: WebSocketServer, buildSnapshot: () => Record<string, unknown> = stubSnapshot): void {
-  wss.on('connection', (socket: WebSocket) => {
+  wss.on('connection', (socket: WebSocket, req?: IncomingMessage) => {
+    const remoteAddress = req?.socket.remoteAddress ?? null;
+    logger.info('websocket client connected', { remoteAddress, clients: wss.clients.size });
+    socket.on('close', (code) => {
+      logger.info('websocket client disconnected', { remoteAddress, code, clients: wss.clients.size });
+    });
+    socket.on('error', (err) => {
+      logger.warn('websocket client error', { remoteAddress, error: err.message });
+    });
+
     socket.send(JSON.stringify(buildSnapshot()));
 
     socket.on('message', (data) => {

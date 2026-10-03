@@ -2,7 +2,10 @@ import { EventEmitter } from 'node:events';
 import { AlarmCommandDispatcher, type AlarmCommandRequest, type CommandSource } from './dispatcher.js';
 import { AlarmPanelRepository, type AlarmMode, type AlarmPanel, type AlarmPanelUpdate } from './panel-repository.js';
 import { EventRepository } from '../events/event-repository.js';
+import { createLogger } from '../config/logger.js';
 import type { SensorDevice } from '../db/repositories/sensor-repository.js';
+
+const logger = createLogger('alarm/panel');
 
 export type ArmMode = Extract<AlarmMode, 'armed_away' | 'armed_home'>;
 
@@ -40,6 +43,9 @@ interface CommandContext {
 }
 
 type PanelCommand = 'arm_away' | 'arm_home' | 'disarm';
+
+/** Why a transition happened, logged alongside the old/new mode (e.g. `{ cause: 'arm_command', source: 'native' }`). */
+type TransitionCause = { cause: string } & Record<string, unknown>;
 
 /**
  * AlarmPanel state-machine service (data-model.md's AlarmPanel state-transitions
@@ -118,7 +124,15 @@ export class PanelService extends EventEmitter {
       relatedSensorId: context.relatedSensorId ?? null,
       details: context.details ?? null,
     });
-    return this.commitPanel({ mode: 'alarm_triggered', pendingDelayEndsAt: null, triggeredBy: event.id });
+    return this.commitPanel(
+      { mode: 'alarm_triggered', pendingDelayEndsAt: null, triggeredBy: event.id },
+      {
+        cause: context.relatedSensorId ? 'sensor_alarm' : 'alarm_triggered',
+        sensorId: context.relatedSensorId ?? null,
+        zoneId: context.relatedZoneId ?? null,
+        details: context.details ?? null,
+      },
+    );
   }
 
   /** Cancels any in-flight exit/entry-delay timer without changing state — for graceful shutdown/test teardown. */
@@ -167,11 +181,14 @@ export class PanelService extends EventEmitter {
     }
 
     this.clearPendingTimer();
-    const panel = this.commitPanel({
-      mode: 'arming',
-      pendingDelayEndsAt: Date.now() + this.exitDelayMs,
-      triggeredBy: null,
-    });
+    const panel = this.commitPanel(
+      {
+        mode: 'arming',
+        pendingDelayEndsAt: Date.now() + this.exitDelayMs,
+        triggeredBy: null,
+      },
+      { cause: 'arm_command', targetMode, source: context.source, sourceUserId: context.sourceUserId },
+    );
 
     this.pendingTimer = setTimeout(() => this.completeArming(targetMode, context), this.exitDelayMs);
     return panel;
@@ -184,7 +201,7 @@ export class PanelService extends EventEmitter {
       return; // Superseded by a disarm during the exit delay.
     }
 
-    this.commitPanel({ mode: targetMode, pendingDelayEndsAt: null });
+    this.commitPanel({ mode: targetMode, pendingDelayEndsAt: null }, { cause: 'exit_delay_elapsed' });
     this.eventRepo.record({
       type: 'armed',
       source: context.source === 'home_assistant' ? 'home_assistant' : 'user',
@@ -200,7 +217,14 @@ export class PanelService extends EventEmitter {
 
     this.clearPendingTimer();
     const wasAlarm = current.mode === 'alarm_pending' || current.mode === 'alarm_triggered';
-    const panel = this.commitPanel({ mode: 'disarmed', pendingDelayEndsAt: null, triggeredBy: null });
+    const panel = this.commitPanel(
+      { mode: 'disarmed', pendingDelayEndsAt: null, triggeredBy: null },
+      {
+        cause: wasAlarm ? 'alarm_cleared' : 'disarm_command',
+        source: context.source,
+        sourceUserId: context.sourceUserId,
+      },
+    );
     this.eventRepo.record({
       type: wasAlarm ? 'alarm_cleared' : 'disarmed',
       source: context.source === 'home_assistant' ? 'home_assistant' : 'user',
@@ -225,11 +249,14 @@ export class PanelService extends EventEmitter {
       relatedZoneId: sensor.zoneId,
       relatedSensorId: sensor.id,
     });
-    const panel = this.commitPanel({
-      mode: 'alarm_pending',
-      pendingDelayEndsAt: Date.now() + this.entryDelayMs,
-      triggeredBy: breachEvent.id,
-    });
+    const panel = this.commitPanel(
+      {
+        mode: 'alarm_pending',
+        pendingDelayEndsAt: Date.now() + this.entryDelayMs,
+        triggeredBy: breachEvent.id,
+      },
+      { cause: 'intrusion_breach', sensorId: sensor.id, zoneId: sensor.zoneId },
+    );
 
     this.pendingTimer = setTimeout(() => this.completeEntryDelay(sensor), this.entryDelayMs);
     return panel;
@@ -245,9 +272,14 @@ export class PanelService extends EventEmitter {
     this.triggerAlarm({ relatedZoneId: sensor.zoneId, relatedSensorId: sensor.id });
   }
 
-  /** Persists a panel update and emits 'panel_changed' with the resulting snapshot (e.g. for T026's siren). */
-  private commitPanel(changes: AlarmPanelUpdate): AlarmPanel {
+  /**
+   * Persists a panel update, logs the transition (old/new mode and `cause`), and emits
+   * 'panel_changed' with the resulting snapshot (e.g. for T026's siren).
+   */
+  private commitPanel(changes: AlarmPanelUpdate, cause: TransitionCause): AlarmPanel {
+    const previousMode = this.panelRepo.getPanel().mode;
     const panel = this.panelRepo.updatePanel(changes);
+    logger.info('panel state transition', { from: previousMode, to: panel.mode, ...cause });
     this.emit('panel_changed', panel);
     return panel;
   }

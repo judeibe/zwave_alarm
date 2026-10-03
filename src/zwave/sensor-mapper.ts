@@ -69,6 +69,7 @@ export class SensorMapper extends EventEmitter {
   start(): void {
     this.driver.controller.nodes.forEach((node) => this.attachNode(node));
     this.driver.controller.on('node added', (node) => this.attachNode(node));
+    logger.info('sensor mapper started', { knownNodes: this.attachedNodeIds.size });
   }
 
   private attachNode(node: ZWaveNode): void {
@@ -77,10 +78,29 @@ export class SensorMapper extends EventEmitter {
     }
     this.attachedNodeIds.add(node.id);
 
-    node.on('notification', (_endpoint, ccId, args) => this.handleNotification(node.id, ccId, args));
-    node.on('value updated', (n, args) => this.handleValueUpdated(n.id, args));
-    node.on('dead', (n) => this.handleConnectivityChange(n.id, 'offline'));
-    node.on('alive', (n) => this.handleConnectivityChange(n.id, 'online'));
+    node.on('notification', (_endpoint, ccId, args) => {
+      logger.debug('node notification', { nodeId: node.id, commandClass: ccId, args });
+      this.handleNotification(node.id, ccId, args);
+    });
+    node.on('value updated', (n, args) => {
+      logger.debug('node value updated', {
+        nodeId: n.id,
+        commandClass: args.commandClass,
+        property: args.property,
+        propertyKey: args.propertyKey,
+        prevValue: args.prevValue,
+        newValue: args.newValue,
+      });
+      this.handleValueUpdated(n.id, args);
+    });
+    node.on('dead', (n) => {
+      logger.warn('node marked dead', { nodeId: n.id });
+      this.handleConnectivityChange(n.id, 'offline');
+    });
+    node.on('alive', (n) => {
+      logger.info('node alive again', { nodeId: n.id });
+      this.handleConnectivityChange(n.id, 'online');
+    });
   }
 
   private handleNotification(nodeId: number, ccId: NotificationCcId, args: NotificationArgs): void {
