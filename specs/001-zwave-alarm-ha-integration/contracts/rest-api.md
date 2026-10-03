@@ -6,7 +6,9 @@ Base path: `/api/v1`. All endpoints require authentication (session cookie for t
 
 ### `POST /api/v1/auth/login`
 
-Native dashboard only. Body: `{ "code": string }`. On success, sets a session cookie and returns the caller's `User` (id, name, role). On failure, increments the caller's failed-attempt counter per the `LockoutPolicy` (FR-016) and returns `401`; once the threshold is exceeded, returns `423 Locked` (or, in `trigger_alarm` mode, returns `200` with the panel already transitioned to `alarm_triggered`).
+Native dashboard only. Body: `{ "code": string }`. On success, sets a session cookie and returns the caller's `User` (id, name, role). On a code that matches no account, returns `401`. A code that matches an account that is currently locked returns `423 Locked`. Failed-attempt counting per the `LockoutPolicy` (FR-016) applies to `POST /api/v1/panel/disarm`, where the caller is already identified: once the threshold is reached it returns `423 Locked` (or, in `trigger_alarm` mode, returns `200` with the panel already transitioned to `alarm_triggered`).
+
+Independently of the per-account lockout, login is rate-limited per client IP: after 5 failed attempts within a minute further attempts return `429 Too Many Requests` (`code: "too_many_requests"`, with a `Retry-After` header) until the window passes. Successful logins do not count against the limit.
 
 ### `POST /api/v1/auth/logout`
 
@@ -46,7 +48,9 @@ Assign an existing `zwave-js` node to this zone. Body: `{ "zwaveNodeId": number,
 
 ### `POST /api/v1/users` — administrator only
 
-Body: `{ "name": string, "role": "administrator" | "member" | "guest", "code": string, "guestExpiresAt"?: string, "guestZoneId"?: string }`.
+Body: `{ "name": string, "role": "administrator" | "member" | "guest", "code": string, "guestExpiresAt"?: string, "guestZoneId"?: string }`. A `guest` requires `guestExpiresAt` (ISO date string; an epoch-ms number is also accepted) and/or `guestZoneId`.
+
+**First-run bootstrap:** while no users exist, this endpoint is the one exception to FR-009 and is accepted without credentials, but only with `"role": "administrator"` (otherwise `403`). Once any user exists it requires an administrator session like the rest of this section. This is what lets a fresh install create its first account (see `quickstart.md` §2).
 
 ### `DELETE /api/v1/users/{userId}` — administrator only
 
@@ -68,4 +72,8 @@ Revokes a previously issued token.
 
 ## Error format
 
-All error responses: `{ "error": { "code": string, "message": string } }` with an appropriate HTTP status (`400`, `401`, `403`, `409`, `423`).
+All error responses: `{ "error": { "code": string, "message": string } }` with an appropriate HTTP status (`400`, `401`, `403`, `404`, `409`, `423`, `429`, `503`).
+
+### Request validation
+
+Every request body and query string is validated against a schema (`src/api/validation.ts`) *after* authentication and authorization, so an unauthenticated caller always sees `401`/`403` rather than details of the expected shape. A body or query that is missing, not an object, has a wrong-typed or out-of-range field (empty or over-long `name`/`code`/`label`, unknown `role`/`mode`/`category`, non-integer `zwaveNodeId`, non-numeric `since`/`limit`, a `guestExpiresAt` that is not a date), or is malformed JSON, returns `400` with `code: "bad_request"` and a `message` naming the offending field. Unknown body fields are ignored.

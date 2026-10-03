@@ -128,11 +128,11 @@ Single project (per `plan.md`): `src/`, `tests/` at repository root, plus `ha-in
 
 **Purpose**: Improvements that affect multiple user stories
 
-- [ ] T043 [P] Write top-level `README.md` covering setup, environment variables, and deployment
+- [X] T043 [P] Write top-level `README.md` covering setup, environment variables, and deployment
 - [X] T044 [P] Add request validation (e.g., zod schemas) across all REST endpoints in `src/api/validation.ts`
 - [X] T045 Security hardening: hash disarm codes and HA tokens (e.g., argon2/bcrypt), rate-limit `/api/v1/auth/login` in `src/auth/`
 - [X] T046 [P] Add structured logging across `src/zwave/`, `src/alarm/`, and `src/api/` using the Phase 2 logger
-- [ ] T047 Run the full `quickstart.md` validation end-to-end and fix any gaps found
+- [X] T047 Run the full `quickstart.md` validation end-to-end and fix any gaps found
 - [X] T048 [P] Optimize the multi-stage `Dockerfile` build (dependency caching, image size)
 
 ---

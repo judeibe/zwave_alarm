@@ -12,7 +12,7 @@ A self-hosted TypeScript/Express service owns a Z-Wave USB controller via `zwave
 
 ## Technical Context
 
-**Language/Version**: TypeScript 5.x on Node.js 20 LTS
+**Language/Version**: TypeScript on Node.js 22 LTS (`better-sqlite3` requires Node >= 22)
 
 **Primary Dependencies**: Express 4.x (HTTP API), `zwave-js` (Z-Wave controller/driver), `zwave-js-server` (standard Z-Wave JS WebSocket protocol, consumed directly by Home Assistant's built-in Z-Wave JS integration), `ws` (WebSocket push channel for the alarm-domain API), `better-sqlite3` (embedded persistence)
 

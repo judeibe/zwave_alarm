@@ -2,56 +2,90 @@
 
 ## Prerequisites
 
-- Node.js 20 LTS, a Z-Wave USB controller (or `zwave-js`'s mock driver for hardware-free testing), and a Home Assistant dev instance on the same network.
+- Node.js 22 LTS or newer (`better-sqlite3` requires it), a Z-Wave USB controller (or `zwave-js`'s mock driver for hardware-free testing), and a Home Assistant dev instance on the same network.
 - Docker (for the containerized run) with the controller's device path available (e.g., `/dev/serial/by-id/...`).
+- `curl` and `jq` for the commands below.
+
+> **No controller attached?** The service still starts: the `zwave-js` driver logs a `zwave-js driver failed to start` error and the REST/WebSocket surface stays up. Everything that does not need a real Z-Wave node can then be validated (sections 2, 3 steps 2 and 4, 4's service-side steps, and the lockout half of 6). Assigning a sensor (`POST /zones/{id}/sensors`) answers `503` until the driver is ready, and the steps that need a physical sensor, siren, or Home Assistant instance are marked **(hardware)** below.
 
 ## 1. Run the service
 
 ```bash
 npm install
-cp .env.example .env   # set SERIAL_PORT, DB_PATH, WS/REST ports
-npm run dev
+cp .env.example .env   # set SERIAL_PORT, DB_PATH, HTTP_PORT, ZWAVE_SERVER_PORT, SESSION_SECRET
+npm run dev            # builds, then starts the service (reads .env)
 ```
 
-Or via the container, with device passthrough:
+Or via the container, with device passthrough. `SERIAL_PORT` must be the **in-container** path the device is mapped to, and the database needs a volume to survive restarts:
 
 ```bash
 docker build -t zwave-alarm .
-docker run --device=/dev/serial/by-id/<your-controller> -p 3000:3000 -p 3001:3001 --env-file .env zwave-alarm
+docker run -d --name zwave-alarm \
+  --device=/dev/serial/by-id/<your-controller>:/dev/zwave \
+  -p 3000:3000 -p 3001:3001 \
+  -v zwave-alarm-data:/app/data \
+  --env-file .env -e SERIAL_PORT=/dev/zwave -e DB_PATH=/app/data/alarm.db \
+  zwave-alarm
 ```
+
+(`docker compose up -d` does the same using `docker-compose.yml`.) Confirm it is up: `curl localhost:3000/healthz` → `{"status":"ok"}`. Every log line is a single JSON object (`docker logs zwave-alarm`); set `LOG_LEVEL=debug` to also see per-node value changes.
 
 ## 2. Bootstrap the first administrator and a zone
 
+Every endpoint needs an authenticated caller, so a fresh install has one exception: while **no users exist**, `POST /api/v1/users` is accepted without credentials, but only to create an `administrator`. Once any user exists it requires an administrator session like everything else.
+
 ```bash
-curl -X POST localhost:3000/api/v1/users -H 'Content-Type: application/json' \
+API=localhost:3000/api/v1
+curl -X POST $API/users -H 'Content-Type: application/json' \
   -d '{"name":"Owner","role":"administrator","code":"123456"}'
-curl -X POST localhost:3000/api/v1/zones -H 'Content-Type: application/json' \
-  -d '{"name":"Front Door"}'
+
+# Log in (stores the session cookie), then use it for administrator-only calls.
+curl -c jar -X POST $API/auth/login -H 'Content-Type: application/json' -d '{"code":"123456"}'
+curl -b jar -X POST $API/zones -H 'Content-Type: application/json' -d '{"name":"Front Door"}'
 ```
+
+Confirm the bootstrap window has closed: repeating the first `POST /users` now returns `401`.
 
 ## 3. Validate User Story 1 — standalone arm/disarm/monitor (no Home Assistant running)
 
-1. Assign a paired Z-Wave contact sensor to the "Front Door" zone with `category: intrusion` via `POST /api/v1/zones/{zoneId}/sensors` (see `contracts/rest-api.md`).
-2. Arm the system: `POST /api/v1/panel/arm { "mode": "armed_away" }`. Confirm `GET /api/v1/panel` shows `arming` then `armed_away` after the exit delay.
-3. Open the door. Confirm the panel moves to `alarm_pending`, then `alarm_triggered` after the entry delay, and the configured siren activates (SC-001, SC-002, User Story 1 acceptance scenarios 1–2).
-4. Disarm with the administrator's code and confirm the panel returns to `disarmed` (acceptance scenario 3).
-5. Unplug or disable a sensor and confirm it is reported as a `device_fault`, distinct from a breach (acceptance scenario 4, FR-012).
+1. **(hardware)** Assign a paired Z-Wave contact sensor to the "Front Door" zone with `category: intrusion`: `curl -b jar -X POST $API/zones/<zoneId>/sensors -H 'Content-Type: application/json' -d '{"zwaveNodeId":2,"name":"Front door contact","category":"intrusion"}'` (see `contracts/rest-api.md`).
+2. Arm the system: `curl -b jar -X POST $API/panel/arm -H 'Content-Type: application/json' -d '{"mode":"armed_away"}'` returns immediately with `arming`. `GET $API/panel` shows `arming` with a `pendingDelayEndsAt`, then `armed_away` once the exit delay (30 s) has elapsed. Arming again while armed returns `409`.
+3. **(hardware)** Open the door. Confirm the panel moves to `alarm_pending`, then `alarm_triggered` after the entry delay, and the configured siren activates (SC-001, SC-002, User Story 1 acceptance scenarios 1–2).
+4. Disarm with the administrator's code (`curl -b jar -X POST $API/panel/disarm -H 'Content-Type: application/json' -d '{"code":"123456"}'`) and confirm the panel returns to `disarmed` (acceptance scenario 3). `GET $API/events` lists the `armed`/`disarmed` events, newest first.
+5. **(hardware)** Unplug or disable a sensor and confirm it is reported as a `device_fault`, distinct from a breach (acceptance scenario 4, FR-012).
 
 ## 4. Validate User Story 2 — Home Assistant integration
 
-1. In Home Assistant, add the built-in "Z-Wave JS" integration pointed at this service's `zwave-js-server` port — confirm the raw sensor entities appear automatically.
-2. Issue a token: `POST /api/v1/ha-links {"label": "dev-ha"}`.
-3. Install `ha-integration/custom_components/zwave_alarm` into the Home Assistant dev instance and complete its config flow with the service host and token.
-4. Confirm `alarm_control_panel.zwave_alarm` appears and reflects the panel's current mode.
-5. Arm/disarm from the native REST API and confirm the Home Assistant entity updates within a couple of seconds (SC-002); then arm/disarm from Home Assistant and confirm it is reflected back via `GET /api/v1/panel`.
-6. Stop the service, confirm the Home Assistant entity goes `unavailable` (not `disarmed`), then restart it and confirm the custom component resyncs to the correct current state (FR-006, Edge Cases).
+1. **(hardware)** In Home Assistant, add the built-in "Z-Wave JS" integration pointed at this service's `zwave-js-server` port (3001) — confirm the raw sensor entities appear automatically.
+2. Issue a token: `curl -b jar -X POST $API/ha-links -H 'Content-Type: application/json' -d '{"label":"dev-ha"}'`. The plaintext `token` is returned **once**; only its hash is stored.
+3. Check the token the way the config flow does: `curl -H "Authorization: Bearer <token>" $API/panel` → `200` (a wrong token → `401`).
+4. **(hardware)** Install `ha-integration/custom_components/zwave_alarm` into the Home Assistant dev instance and complete its config flow with the service host and token.
+5. **(hardware)** Confirm `alarm_control_panel.zwave_alarm` appears and reflects the panel's current mode.
+6. Confirm the push channel is authenticated and live. A client with no credentials is refused (`401`) during the WebSocket handshake; with the token (header `Authorization: Bearer <token>`) or a dashboard session cookie it receives a `snapshot`, then `panel.changed` as soon as you arm/disarm (SC-002). Disarming with the token (`curl -H "Authorization: Bearer <token>" -X POST $API/panel/disarm …`) is recorded with `source: home_assistant`; **(hardware)** confirm the Home Assistant entity updates within a couple of seconds in both directions.
+7. Restart the service (`docker restart zwave-alarm`). The token and users persist; browser sessions do not (log in again). A reconnecting client receives a fresh `snapshot` first. **(hardware)** Confirm the Home Assistant entity goes `unavailable` (not `disarmed`) while the service is down, then resyncs to the correct current state on restart (FR-006, Edge Cases).
+8. Revoke the token (`DELETE $API/ha-links/<linkId>`) and confirm both `GET /panel` and a WebSocket connection with it now return `401`.
 
 ## 5. Validate User Story 3 — alerts on trigger
 
-1. Trigger a breach as in step 3 above and confirm the local siren activates immediately (FR-013).
-2. Build a simple Home Assistant automation on `alarm_control_panel.zwave_alarm` changing to `triggered` that sends a mobile notification, confirming the "remote notification via Home Assistant automation" design (FR-013).
+1. **(hardware)** Trigger a breach as in step 3 above and confirm the local siren activates immediately (FR-013). Without `SIREN_NODE_ID` set, the service logs a `no siren device configured` warning at start-up and again when an alarm triggers.
+2. **(hardware)** Build a simple Home Assistant automation on `alarm_control_panel.zwave_alarm` changing to `triggered` that sends a mobile notification, confirming the "remote notification via Home Assistant automation" design (FR-013). See `ha-integration/README.md` for a sample.
 
 ## 6. Validate life-safety gating and lockout (Clarifications, FR-015/FR-016)
 
-1. While `disarmed`, simulate a smoke sensor triggering (`category: life-safety`) and confirm the panel enters `alarm_triggered` immediately, with no entry delay.
-2. Attempt to disarm with an incorrect code repeatedly and confirm the account locks out after the configured threshold and a `lockout` `SecurityEvent` is recorded; then flip `LockoutPolicy.onThresholdExceeded` to `trigger_alarm` and confirm repeated failures instead raise `alarm_triggered`.
+1. **(hardware)** While `disarmed`, simulate a smoke sensor triggering (`category: life-safety`) and confirm the panel enters `alarm_triggered` immediately, with no entry delay.
+2. Attempt to disarm with an incorrect code repeatedly (with a logged-in session). The first four attempts return `401`; the fifth (the default threshold) returns `423` and the account stays locked — even the correct code is refused — and a `lockout` `SecurityEvent` is recorded.
+3. There is no REST endpoint for the lockout policy; to flip `LockoutPolicy.onThresholdExceeded` to `trigger_alarm` (and clear the lock from step 2) edit the database directly, then repeat step 2 and confirm the fifth failure instead returns `200` with the panel in `alarm_triggered`:
+
+   ```bash
+   docker exec zwave-alarm node -e '
+     const d = new (require("better-sqlite3"))("/app/data/alarm.db");
+     d.prepare("UPDATE lockout_policy SET on_threshold_exceeded = ? WHERE id = ?").run("trigger_alarm", "policy");
+     d.prepare("UPDATE users SET locked_until = NULL, failed_attempt_count = 0").run();'
+   ```
+
+   (Bare metal: the same `UPDATE`s with `sqlite3 "$DB_PATH"`. The `lockout_policy` row is created on the first failed attempt, so run step 2 first.)
+
+## 7. Input validation and rate limiting (Phase 5 hardening)
+
+1. Malformed input is rejected with `400` in the standard error format on every endpoint, e.g. `curl -b jar -X POST $API/panel/arm -H 'Content-Type: application/json' -d '{"mode":"nonsense"}'` → `{"error":{"code":"bad_request","message":"Invalid request body: …"}}`; likewise `GET $API/events?limit=abc`.
+2. More than 5 failed `POST /auth/login` attempts from one IP within a minute return `429` (`too_many_requests`) with a `Retry-After` header. Successful logins do not count against the limit.
