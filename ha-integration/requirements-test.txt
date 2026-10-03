@@ -1,0 +1,7 @@
+pytest
+pytest-asyncio
+# Pinned below aioresponses' supported ceiling: aioresponses 0.7.9 mocks
+# aiohttp's ClientResponse constructor directly, which aiohttp>=3.10 changed
+# (new required `stream_writer` kwarg), breaking every mocked request.
+aiohttp<3.10
+aioresponses

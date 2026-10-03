@@ -1,0 +1,7 @@
+node_modules/
+dist/
+*.log
+.env
+ha-integration/.venv/
+__pycache__/
+.pytest_cache/
