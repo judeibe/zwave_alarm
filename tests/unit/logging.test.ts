@@ -38,7 +38,7 @@ describe('structured logging (T046)', () => {
       vi.stubEnv('DB_PATH', ':memory:');
       vi.stubEnv('HTTP_PORT', '3000');
       vi.stubEnv('ZWAVE_SERVER_PORT', '3001');
-      vi.stubEnv('SESSION_SECRET', 'test-secret');
+      vi.stubEnv('SESSION_SECRET', 'test-secret-0123456789abcdef0123456789');
       const { createApp } = await import('../../src/api/app.js');
       return createApp();
     }

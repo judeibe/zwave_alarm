@@ -19,7 +19,7 @@ function setEnv() {
   process.env.DB_PATH = ':memory:';
   process.env.HTTP_PORT = '3000';
   process.env.ZWAVE_SERVER_PORT = '3001';
-  process.env.SESSION_SECRET = 'test-secret';
+  process.env.SESSION_SECRET = 'test-secret-0123456789abcdef0123456789';
 }
 
 class MockDriver {

@@ -1,13 +1,13 @@
 import { EventEmitter } from 'node:events';
 import { AlarmCommandDispatcher, type AlarmCommandRequest, type CommandSource } from './dispatcher.js';
-import { AlarmPanelRepository, type AlarmMode, type AlarmPanel, type AlarmPanelUpdate } from './panel-repository.js';
+import { AlarmPanelRepository, type AlarmPanel, type AlarmPanelUpdate, type ArmedMode } from './panel-repository.js';
 import { EventRepository } from '../events/event-repository.js';
 import { createLogger } from '../config/logger.js';
 import type { SensorDevice } from '../db/repositories/sensor-repository.js';
 
 const logger = createLogger('alarm/panel');
 
-export type ArmMode = Extract<AlarmMode, 'armed_away' | 'armed_home'>;
+export type ArmMode = ArmedMode;
 
 /** Thrown when a command is requested from a panel mode that doesn't support it (e.g. arming while already armed). */
 export class PanelStateError extends Error {}
@@ -37,7 +37,8 @@ const DEFAULT_EXIT_DELAY_MS = 30_000;
 const DEFAULT_ENTRY_DELAY_MS = 30_000;
 
 interface CommandContext {
-  source: CommandSource;
+  /** `system` is a delay resumed after a restart, where the original requester is no longer known. */
+  source: CommandSource | 'system';
   sourceUserId: string | null;
   clearedBy: string | null;
 }
@@ -46,6 +47,10 @@ type PanelCommand = 'arm_away' | 'arm_home' | 'disarm';
 
 /** Why a transition happened, logged alongside the old/new mode (e.g. `{ cause: 'arm_command', source: 'native' }`). */
 type TransitionCause = { cause: string } & Record<string, unknown>;
+
+function eventSource(source: CommandContext['source']): 'user' | 'home_assistant' | 'system' {
+  return source === 'home_assistant' ? 'home_assistant' : source === 'system' ? 'system' : 'user';
+}
 
 /**
  * AlarmPanel state-machine service (data-model.md's AlarmPanel state-transitions
@@ -135,6 +140,47 @@ export class PanelService extends EventEmitter {
     );
   }
 
+  /**
+   * Re-establishes the exit/entry-delay timer for a mode that was persisted across a restart
+   * (SC-006). The panel row survives a restart but the `setTimeout` that drives it does not, so
+   * without this an `arming` panel never finishes arming and an `alarm_pending` one never escalates
+   * to `alarm_triggered`. Call once at start-up, after the `panel_changed` listeners (siren,
+   * WebSocket broadcaster) are attached.
+   *
+   * A delay that already elapsed while the service was down fires on the next tick, so an overdue
+   * breach escalates immediately rather than being given a fresh grace period. `alarm_triggered`
+   * needs nothing here: the siren re-evaluates the persisted state itself once the Z-Wave driver is
+   * ready (src/alarm/siren.ts `sync`).
+   */
+  resume(): void {
+    const panel = this.panelRepo.getPanel();
+    const remainingMs = Math.max(0, (panel.pendingDelayEndsAt ?? 0) - Date.now());
+
+    if (panel.mode === 'arming') {
+      if (panel.armedMode === null) {
+        // A row written before `armed_mode` existed: the target is unknowable. Fail to the state
+        // the user can see and re-arm from rather than guessing.
+        logger.warn('arming interrupted by a restart with no recorded target mode; falling back to disarmed');
+        this.commitPanel(
+          { mode: 'disarmed', pendingDelayEndsAt: null, triggeredBy: null, armedMode: null },
+          { cause: 'restart_recovery' },
+        );
+        return;
+      }
+      const target = panel.armedMode;
+      const context: CommandContext = { source: 'system', sourceUserId: null, clearedBy: null };
+      this.clearPendingTimer();
+      this.pendingTimer = setTimeout(() => this.completeArming(target, context), remainingMs);
+    } else if (panel.mode === 'alarm_pending') {
+      const trigger = panel.triggeredBy ? this.eventRepo.findById(panel.triggeredBy) : undefined;
+      const sensor = { id: trigger?.relatedSensorId ?? null, zoneId: trigger?.relatedZoneId ?? null };
+      this.clearPendingTimer();
+      this.pendingTimer = setTimeout(() => this.completeEntryDelay(sensor), remainingMs);
+    }
+
+    logger.info('panel state resumed after restart', { mode: panel.mode, remainingMs });
+  }
+
   /** Cancels any in-flight exit/entry-delay timer without changing state — for graceful shutdown/test teardown. */
   stop(): void {
     this.clearPendingTimer();
@@ -186,6 +232,7 @@ export class PanelService extends EventEmitter {
         mode: 'arming',
         pendingDelayEndsAt: Date.now() + this.exitDelayMs,
         triggeredBy: null,
+        armedMode: targetMode,
       },
       { cause: 'arm_command', targetMode, source: context.source, sourceUserId: context.sourceUserId },
     );
@@ -204,7 +251,7 @@ export class PanelService extends EventEmitter {
     this.commitPanel({ mode: targetMode, pendingDelayEndsAt: null }, { cause: 'exit_delay_elapsed' });
     this.eventRepo.record({
       type: 'armed',
-      source: context.source === 'home_assistant' ? 'home_assistant' : 'user',
+      source: eventSource(context.source),
       sourceUserId: context.sourceUserId,
     });
   }
@@ -218,7 +265,7 @@ export class PanelService extends EventEmitter {
     this.clearPendingTimer();
     const wasAlarm = current.mode === 'alarm_pending' || current.mode === 'alarm_triggered';
     const panel = this.commitPanel(
-      { mode: 'disarmed', pendingDelayEndsAt: null, triggeredBy: null },
+      { mode: 'disarmed', pendingDelayEndsAt: null, triggeredBy: null, armedMode: null },
       {
         cause: wasAlarm ? 'alarm_cleared' : 'disarm_command',
         source: context.source,
@@ -227,7 +274,7 @@ export class PanelService extends EventEmitter {
     );
     this.eventRepo.record({
       type: wasAlarm ? 'alarm_cleared' : 'disarmed',
-      source: context.source === 'home_assistant' ? 'home_assistant' : 'user',
+      source: eventSource(context.source),
       sourceUserId: context.sourceUserId,
       // Only the alarm-clearing case needs "cleared, and by whom" (User Story 3's second
       // acceptance scenario); a plain disarm from an already-safe state doesn't.
@@ -262,7 +309,7 @@ export class PanelService extends EventEmitter {
     return panel;
   }
 
-  private completeEntryDelay(sensor: SensorBreachInput): void {
+  private completeEntryDelay(sensor: { id: string | null; zoneId: string | null }): void {
     this.pendingTimer = null;
     const current = this.panelRepo.getPanel();
     if (current.mode !== 'alarm_pending') {

@@ -93,6 +93,15 @@ const MIGRATIONS: Migration[] = [
       CREATE INDEX idx_ha_links_user_id ON ha_links(user_id);
     `,
   },
+  {
+    // The mode the panel is armed (or arming) towards. Without it a restart during the exit delay
+    // can't tell armed_away from armed_home, and an alarm clearing back to "armed" can't either.
+    id: '002_panel_armed_mode',
+    sql: `
+      ALTER TABLE alarm_panel ADD COLUMN armed_mode TEXT
+        CHECK (armed_mode IN ('armed_away', 'armed_home'));
+    `,
+  },
 ];
 
 function ensureMigrationsTable(db: Database.Database): void {

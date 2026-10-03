@@ -12,7 +12,7 @@
 
 ```bash
 npm install
-cp .env.example .env   # set SERIAL_PORT, DB_PATH, HTTP_PORT, ZWAVE_SERVER_PORT, SESSION_SECRET
+cp .env.example .env   # set SERIAL_PORT, and SESSION_SECRET to a real value (openssl rand -hex 32); the service refuses to start with the placeholder
 npm run dev            # builds, then starts the service (reads .env)
 ```
 

@@ -13,6 +13,11 @@ export interface AppConfig {
 
 export class ConfigError extends Error {}
 
+/** Session cookies are signed with this secret, so a short or example value would be guessable. */
+const MIN_SESSION_SECRET_LENGTH = 32;
+/** `.env.example` ships a value starting with this; copying it unchanged must not start a service. */
+const SESSION_SECRET_PLACEHOLDER_PREFIX = 'change-me';
+
 const REQUIRED_VARS = [
   'SERIAL_PORT',
   'DB_PATH',
@@ -32,6 +37,16 @@ function parsePort(name: string, value: string): number {
     throw new ConfigError(`${name} must be an integer between 1 and 65535, got "${value}"`);
   }
   return port;
+}
+
+function validateSessionSecret(secret: string): string {
+  if (secret.length < MIN_SESSION_SECRET_LENGTH || secret.startsWith(SESSION_SECRET_PLACEHOLDER_PREFIX)) {
+    throw new ConfigError(
+      `SESSION_SECRET must be a random value of at least ${MIN_SESSION_SECRET_LENGTH} characters and not the ` +
+        `.env.example placeholder. Generate one with: openssl rand -hex 32`,
+    );
+  }
+  return secret;
 }
 
 function parseSirenNodeId(value: string): number {
@@ -77,7 +92,7 @@ function loadConfig(): AppConfig {
     httpPort,
     zwaveServerPort,
     zwaveServerHost,
-    sessionSecret: readEnv('SESSION_SECRET')!,
+    sessionSecret: validateSessionSecret(readEnv('SESSION_SECRET')!),
     sirenNodeId,
   };
 }

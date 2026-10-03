@@ -1,3 +1,4 @@
+import Database from 'better-sqlite3';
 import { describe, expect, it } from 'vitest';
 import { createDatabase, runMigrations } from '../../src/db/schema.js';
 
@@ -26,11 +27,32 @@ describe('db schema', () => {
   it('records the applied migration and is idempotent on re-run', () => {
     const db = createDatabase(':memory:');
     const applied = db.prepare('SELECT id FROM schema_migrations').all();
-    expect(applied).toEqual([{ id: '001_init' }]);
+    expect(applied).toEqual([{ id: '001_init' }, { id: '002_panel_armed_mode' }]);
 
     // Running again must not error (CREATE TABLE would fail if re-applied) or duplicate rows.
     expect(() => runMigrations(db)).not.toThrow();
-    expect(db.prepare('SELECT id FROM schema_migrations').all()).toEqual([{ id: '001_init' }]);
+    expect(db.prepare('SELECT id FROM schema_migrations').all()).toEqual([
+      { id: '001_init' },
+      { id: '002_panel_armed_mode' },
+    ]);
+  });
+
+  it('upgrades an existing database, keeping its panel row and defaulting armed_mode to null', () => {
+    const db = new Database(':memory:');
+    db.pragma('foreign_keys = ON');
+    // Reproduce a database created before migration 002 by applying only 001 by hand.
+    runMigrations(db);
+    db.exec('DROP TABLE alarm_panel');
+    db.exec(`CREATE TABLE alarm_panel (
+      id TEXT PRIMARY KEY CHECK (id = 'panel'),
+      mode TEXT NOT NULL, pending_delay_ends_at INTEGER, triggered_by TEXT, updated_at INTEGER NOT NULL)`);
+    db.prepare("INSERT INTO alarm_panel VALUES ('panel', 'armed_away', NULL, NULL, 1)").run();
+    db.prepare("DELETE FROM schema_migrations WHERE id = '002_panel_armed_mode'").run();
+
+    runMigrations(db);
+
+    expect(db.prepare('SELECT mode, armed_mode FROM alarm_panel').get()).toEqual({ mode: 'armed_away', armed_mode: null });
+    expect(() => db.prepare("UPDATE alarm_panel SET armed_mode = 'bogus'").run()).toThrow();
   });
 
   it('enforces foreign keys between zones and sensor_devices', () => {

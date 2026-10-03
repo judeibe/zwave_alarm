@@ -47,8 +47,12 @@ const driver = getDriver();
 // rather than running right away. Siren only touches controller.nodes
 // lazily inside its panel_changed handler, so it's safe to construct now.
 const sensorMapper = new SensorMapper(driver, sensorRepo, panelService, eventRepo);
-driver.once('driver ready', () => sensorMapper.start());
-new Siren(driver, panelService, { nodeId: config.sirenNodeId });
+driver.once('driver ready', () => {
+  sensorMapper.start();
+  // A siren state that had to wait for the driver (e.g. alarm_triggered restored after a restart).
+  siren.sync();
+});
+const siren = new Siren(driver, panelService, { nodeId: config.sirenNodeId });
 
 const app = createApp({ panelService, userRepo, zoneRepo, sensorRepo, lockoutService, eventRepo, haLinkRepo, driver });
 const httpServer = createServer(app);
@@ -65,6 +69,10 @@ const wss = createWebSocketServer(
   () => buildLiveSnapshot({ panelService, zoneRepo }),
 );
 attachWsBroadcaster(wss, { panelService, sensorMapper, eventRepo, zoneRepo });
+
+// After the siren and broadcaster are listening: re-schedules an exit/entry delay that was in
+// flight when the service last stopped (SC-006), which may itself commit a transition.
+panelService.resume();
 
 httpServer.listen(config.httpPort, () => {
   logger.info('HTTP/WebSocket server listening', {

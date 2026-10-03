@@ -130,10 +130,19 @@ Single project (per `plan.md`): `src/`, `tests/` at repository root, plus `ha-in
 
 - [X] T043 [P] Write top-level `README.md` covering setup, environment variables, and deployment
 - [X] T044 [P] Add request validation (e.g., zod schemas) across all REST endpoints in `src/api/validation.ts`
-- [X] T045 Security hardening: hash disarm codes and HA tokens (e.g., argon2/bcrypt), rate-limit `/api/v1/auth/login` in `src/auth/`
+- [X] T045 Security hardening in `src/auth/`: keep disarm codes on salted `scrypt` (a memory-hard KDF; argon2/bcrypt would add a native dependency to the multi-arch image for no gain) and HA tokens as SHA-256 of a 256-bit random value (looked up by hash, so a salted slow hash cannot apply); rate-limit `/api/v1/auth/login`
 - [X] T046 [P] Add structured logging across `src/zwave/`, `src/alarm/`, and `src/api/` using the Phase 2 logger
 - [X] T047 Run the full `quickstart.md` validation end-to-end and fix any gaps found
 - [X] T048 [P] Optimize the multi-stage `Dockerfile` build (dependency caching, image size)
+
+
+---
+
+## Phase 7: Analysis Remediation
+
+**Purpose**: Gaps found by `/speckit-analyze` after Phase 6, each traced to a spec requirement
+
+- [X] T049 [US1] Resume persisted arming/alarm_pending timers and re-sound the siren after a restart (SC-006, Edge Cases): migration 002 (`armed_mode`) in `src/db/schema.ts`, `PanelService.resume()` in `src/alarm/panel-service.ts`, driver-ready-safe `Siren.sync()` in `src/alarm/siren.ts`, wired in `src/index.ts`
 
 ---
 

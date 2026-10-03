@@ -1,6 +1,8 @@
 import type Database from 'better-sqlite3';
 import { Repository } from '../db/repository.js';
 
+export type ArmedMode = 'armed_away' | 'armed_home';
+
 export type AlarmMode = 'disarmed' | 'arming' | 'armed_away' | 'armed_home' | 'alarm_pending' | 'alarm_triggered';
 
 export interface AlarmPanel {
@@ -9,6 +11,12 @@ export interface AlarmPanel {
   pendingDelayEndsAt: number | null;
   /** The SecurityEvent that caused the current alarm_triggered state, if any. */
   triggeredBy: string | null;
+  /**
+   * The armed mode the panel is in or heading to: set when arming begins and kept through
+   * `alarm_pending`/`alarm_triggered`, null once disarmed (or if an alarm fires while disarmed,
+   * e.g. a life-safety sensor). Persisted so a restart can resume the exit delay faithfully.
+   */
+  armedMode: ArmedMode | null;
   updatedAt: number;
 }
 
@@ -19,6 +27,7 @@ interface AlarmPanelRow {
   mode: AlarmMode;
   pending_delay_ends_at: number | null;
   triggered_by: string | null;
+  armed_mode: ArmedMode | null;
   updated_at: number;
 }
 
@@ -29,6 +38,7 @@ function toDomain(row: AlarmPanelRow): AlarmPanel {
     mode: row.mode,
     pendingDelayEndsAt: row.pending_delay_ends_at,
     triggeredBy: row.triggered_by,
+    armedMode: row.armed_mode,
     updatedAt: row.updated_at,
   };
 }
@@ -57,6 +67,7 @@ export class AlarmPanelRepository extends Repository {
       mode: 'disarmed',
       pendingDelayEndsAt: null,
       triggeredBy: null,
+      armedMode: null,
       updatedAt: Date.now(),
     };
     this.run(
@@ -80,10 +91,13 @@ export class AlarmPanelRepository extends Repository {
     };
 
     this.run(
-      'UPDATE alarm_panel SET mode = ?, pending_delay_ends_at = ?, triggered_by = ?, updated_at = ? WHERE id = ?',
+      `UPDATE alarm_panel
+         SET mode = ?, pending_delay_ends_at = ?, triggered_by = ?, armed_mode = ?, updated_at = ?
+       WHERE id = ?`,
       next.mode,
       next.pendingDelayEndsAt,
       next.triggeredBy,
+      next.armedMode,
       next.updatedAt,
       SINGLETON_ID,
     );

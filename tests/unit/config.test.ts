@@ -7,7 +7,7 @@ const validEnv: Record<(typeof ENV_KEYS)[number], string> = {
   DB_PATH: './data/alarm.db',
   HTTP_PORT: '3000',
   ZWAVE_SERVER_PORT: '3001',
-  SESSION_SECRET: 'test-secret',
+  SESSION_SECRET: 'test-secret-0123456789abcdef0123456789',
 };
 
 function setEnv(overrides: Partial<Record<(typeof ENV_KEYS)[number], string | undefined>> = {}) {
@@ -36,6 +36,33 @@ describe('config loader', () => {
     process.env = { ...originalEnv };
   });
 
+  describe('SESSION_SECRET strength', () => {
+    it.each([
+      ['too short', 'short-secret'],
+      ['31 characters', 'x'.repeat(31)],
+      ['the .env.example placeholder', 'change-me-to-a-long-random-string'],
+      ['a padded placeholder', 'change-me-' + 'x'.repeat(40)],
+    ])('rejects %s without echoing the value', async (_label, secret) => {
+      setEnv({ SESSION_SECRET: secret });
+
+      const failure = await import('../../src/config/index.js').then(
+        () => undefined,
+        (err: unknown) => err as Error,
+      );
+
+      expect(failure?.message).toMatch(/SESSION_SECRET must be a random value of at least 32 characters/);
+      expect(failure?.message).not.toContain(secret);
+    });
+
+    it('accepts a 32-character random value', async () => {
+      setEnv({ SESSION_SECRET: 'a'.repeat(32) });
+
+      const { config } = await import('../../src/config/index.js');
+
+      expect(config.sessionSecret).toBe('a'.repeat(32));
+    });
+  });
+
   it('loads a valid configuration from process.env', async () => {
     setEnv();
     delete process.env.SIREN_NODE_ID;
@@ -47,7 +74,7 @@ describe('config loader', () => {
       httpPort: 3000,
       zwaveServerPort: 3001,
       zwaveServerHost: '0.0.0.0',
-      sessionSecret: 'test-secret',
+      sessionSecret: 'test-secret-0123456789abcdef0123456789',
       sirenNodeId: null,
     });
   });

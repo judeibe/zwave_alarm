@@ -27,7 +27,7 @@ Z-Wave USB controller ── zwave-js driver ──┬── alarm engine (arm/d
 
 ```bash
 npm install
-cp .env.example .env     # then edit it, at minimum SERIAL_PORT and SESSION_SECRET
+cp .env.example .env     # then edit it: SERIAL_PORT, and a real SESSION_SECRET (openssl rand -hex 32)
 npm run dev              # builds, then starts the service (loads .env)
 ```
 
@@ -50,7 +50,7 @@ All configuration is through environment variables (a `.env` file is read by `np
 | `DB_PATH` | yes | none | SQLite database file. The parent directory is created if needed. In Docker, put it on a volume (`/app/data/alarm.db`). |
 | `HTTP_PORT` | yes | none | Port for the REST API, WebSocket push channel (`/api/v1/stream`) and dashboard. |
 | `ZWAVE_SERVER_PORT` | yes | none | Port `zwave-js-server` listens on, which Home Assistant's "Z-Wave JS" integration connects to. Must differ from `HTTP_PORT`. |
-| `SESSION_SECRET` | yes | none | Secret used to sign dashboard session cookies. Use a long random value, for example `openssl rand -hex 32`. |
+| `SESSION_SECRET` | yes | none | Secret used to sign dashboard session cookies: at least 32 characters, and not the `.env.example` placeholder (the service refuses to start otherwise). Generate one with `openssl rand -hex 32`. |
 | `ZWAVE_SERVER_HOST` | no | `0.0.0.0` | Interface `zwave-js-server` binds to. It needs to be reachable from Home Assistant but should not be exposed to the internet. |
 | `SIREN_NODE_ID` | no | unset | Z-Wave node id of the paired siren/alert device. Without it the alarm works but nothing sounds locally, and a warning is logged. |
 | `LOG_LEVEL` | no | `info` | `debug`, `info`, `warn` or `error`. `debug` adds per-node Z-Wave value changes. |
