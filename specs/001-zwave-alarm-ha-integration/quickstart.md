@@ -59,7 +59,7 @@ Confirm the bootstrap window has closed: repeating the first `POST /users` now r
 1. **(hardware)** In Home Assistant, add the built-in "Z-Wave JS" integration pointed at this service's `zwave-js-server` port (3001) — confirm the raw sensor entities appear automatically.
 2. Issue a token: `curl -b jar -X POST $API/ha-links -H 'Content-Type: application/json' -d '{"label":"dev-ha"}'`. The plaintext `token` is returned **once**; only its hash is stored.
 3. Check the token the way the config flow does: `curl -H "Authorization: Bearer <token>" $API/panel` → `200` (a wrong token → `401`).
-4. **(hardware)** Install `ha-integration/custom_components/zwave_alarm` into the Home Assistant dev instance and complete its config flow with the service host and token.
+4. **(hardware)** Install the `zwave_alarm` component from https://github.com/judeibe/ha-zwave-alarm into the Home Assistant dev instance and complete its config flow with the service host and token.
 5. **(hardware)** Confirm `alarm_control_panel.zwave_alarm` appears and reflects the panel's current mode.
 6. Confirm the push channel is authenticated and live. A client with no credentials is refused (`401`) during the WebSocket handshake; with the token (header `Authorization: Bearer <token>`) or a dashboard session cookie it receives a `snapshot`, then `panel.changed` as soon as you arm/disarm (SC-002). Disarming with the token (`curl -H "Authorization: Bearer <token>" -X POST $API/panel/disarm …`) is recorded with `source: home_assistant`; **(hardware)** confirm the Home Assistant entity updates within a couple of seconds in both directions.
 7. Restart the service (`docker restart zwave-alarm`; it stops cleanly in well under a second, logging `shutting down` and `shutdown complete`). The token and users persist, and an exit or entry delay in flight resumes with the time that was left; browser sessions do not (log in again). A reconnecting client receives a fresh `snapshot` first. **(hardware)** Confirm the Home Assistant entity goes `unavailable` (not `disarmed`) while the service is down, then resyncs to the correct current state on restart (FR-006, Edge Cases).
@@ -68,7 +68,7 @@ Confirm the bootstrap window has closed: repeating the first `POST /users` now r
 ## 5. Validate User Story 3 — alerts on trigger
 
 1. **(hardware)** Trigger a breach as in step 3 above and confirm the local siren activates immediately (FR-013). Without `SIREN_NODE_ID` set, the service logs a `no siren device configured` warning at start-up and again when an alarm triggers.
-2. **(hardware)** Build a simple Home Assistant automation on `alarm_control_panel.zwave_alarm` changing to `triggered` that sends a mobile notification, confirming the "remote notification via Home Assistant automation" design (FR-013). See `ha-integration/README.md` for a sample.
+2. **(hardware)** Build a simple Home Assistant automation on `alarm_control_panel.zwave_alarm` changing to `triggered` that sends a mobile notification, confirming the "remote notification via Home Assistant automation" design (FR-013). See the README of https://github.com/judeibe/ha-zwave-alarm for a sample.
 
 ## 6. Validate life-safety gating and lockout (Clarifications, FR-015/FR-016)
 

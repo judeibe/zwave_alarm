@@ -62,7 +62,7 @@ jobs:
 
   # On main, derives the next version from the Conventional Commits since the last tag:
   # BREAKING CHANGE (or "!") -> major, feat -> minor, fix -> patch; other types do not release.
-  # It then bumps package.json, package-lock.json and the HA manifest together, commits, tags vX.Y.Z and
+  # It then bumps package.json and package-lock.json together, commits, tags vX.Y.Z and
   # creates the GitHub release. Pushes made with GITHUB_TOKEN do not trigger new runs, so the docker job
   # below publishes this release itself. The first run, with no tag yet, releases package.json's version as is.
   release:

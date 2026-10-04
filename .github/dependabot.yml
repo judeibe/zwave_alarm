@@ -25,8 +25,3 @@ updates:
     directory: /
     patterns: ["*"]
     multi-ecosystem-group: dependencies
-
-  - package-ecosystem: pip
-    directory: /ha-integration
-    patterns: ["*"]
-    multi-ecosystem-group: dependencies

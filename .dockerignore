@@ -6,7 +6,6 @@ dist
 .serena
 tests
 specs
-ha-integration
 .vscode
 .claude
 .specify
