@@ -74,7 +74,7 @@ ha-integration/
 └── custom_components/zwave_alarm/   # Home Assistant custom component (Python), consumes src/api's REST/WS contract
 ```
 
-**Structure Decision**: Single repository, single deployable Node/TypeScript service (Option 1: single project), plus a `ha-integration/` top-level directory holding the Home Assistant custom component. The custom component is a separate language/runtime (Python, per Home Assistant's `custom_components` convention) and is versioned alongside the service it talks to, but is not part of the Node build or `src/` tree.
+**Structure Decision**: Single repository, single deployable Node/TypeScript service (Option 1: single project), plus a Home Assistant custom component that was later extracted to the separate `ha-zwave-alarm` repository (using the `zwave-alarm-client` package). The custom component is a separate language/runtime (Python, per Home Assistant's `custom_components` convention) and is versioned alongside the service it talks to, but is not part of the Node build or `src/` tree.
 
 ## Complexity Tracking
 
