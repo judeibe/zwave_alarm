@@ -32,7 +32,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-node@v4
         with:
@@ -53,7 +53,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           ref: ${{ github.event.pull_request.head.sha }}
@@ -75,7 +75,7 @@ jobs:
     outputs:
       tag: ${{ steps.next.outputs.released == 'true' && format('v{0}', steps.next.outputs.version) || '' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0 # the commit history and tags decide the version
 
@@ -118,7 +118,7 @@ jobs:
       id-token: write # keyless attestation signing
       attestations: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # A release build uses the commit that carries the bumped version.
           ref: ${{ needs.release.outputs.tag || github.sha }}
