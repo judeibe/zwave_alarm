@@ -14,10 +14,11 @@ on:
         options: [auto, patch, minor, major]
         default: auto
 
-# One run per ref; a newer push cancels the stale one (but never cancels a tag/release publish).
+# One run per ref. A newer pull request push cancels the stale run, but runs on main and tags queue instead:
+# cancelling one between tagging and publishing would leave a release without its image.
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && !startsWith(github.ref, 'refs/tags/')) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # Least privilege by default; jobs that need more declare it themselves.
 permissions:
@@ -101,7 +102,7 @@ jobs:
             git commit -am "chore(release): v${version}"
           fi
           git tag -a "v${version}" -m "v${version}"
-          git push origin HEAD:main "v${version}"
+          git push --atomic origin HEAD:main "v${version}" # the version commit and tag land together or not at all
           gh release create "v${version}" --title "v${version}" --generate-notes
           echo "released=true" >> "$GITHUB_OUTPUT"
 
