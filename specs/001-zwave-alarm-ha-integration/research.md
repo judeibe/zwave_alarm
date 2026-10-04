@@ -45,7 +45,7 @@
 **Decision**: Two complementary integration surfaces:
 
 1. **Raw device passthrough** — `zwave-js-server` runs inside this service and exposes the standard Z-Wave JS WebSocket protocol. Home Assistant's own built-in "Z-Wave JS" integration (no custom code) connects to it directly, so every physical sensor already appears in Home Assistant as a native entity.
-2. **Alarm-domain surface** — the Home Assistant custom component (`ha-integration/custom_components/zwave_alarm`) talks to this service's own REST/WebSocket API (see `contracts/`) to expose concepts the raw protocol doesn't know about: panel arm state, zone membership, and life-safety-vs-intrusion categorization (FR-007).
+2. **Alarm-domain surface** — the Home Assistant custom component (`custom_components/zwave_alarm` in the `ha-zwave-alarm` repository) talks to this service's own REST/WebSocket API (see `contracts/`) to expose concepts the raw protocol doesn't know about: panel arm state, zone membership, and life-safety-vs-intrusion categorization (FR-007).
 
 **Rationale**: Satisfies FR-007 (custom component exposes alarm/sensor state) without re-implementing device-level entity exposure that Home Assistant's existing, well-tested Z-Wave JS integration already provides — reducing custom-component surface area to only the genuinely new domain concepts.
 
