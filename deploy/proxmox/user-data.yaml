@@ -1,10 +1,10 @@
 #cloud-config
 # Proxmox "snippets" cloud-init user-data for the zwave-alarm VM (Ubuntu Server + Docker).
-# Replace the <PLACEHOLDERS> before uploading to a snippets-enabled storage.
+# Replace <YOUR_SSH_PUBLIC_KEY> before copying to <snippets-storage>:snippets/. Safe to re-run:
+# the .env (and its generated secret) is only created when missing.
 hostname: zwave-alarm
 manage_etc_hosts: true
 package_update: true
-package_upgrade: true
 users:
   - name: ubuntu
     groups: [sudo, docker]
@@ -13,17 +13,18 @@ users:
     lock_passwd: true
     ssh_authorized_keys:
       - <YOUR_SSH_PUBLIC_KEY>
-packages: [qemu-guest-agent, ca-certificates, curl]
+# linux-generic ships the cdc_acm driver the Z-Wave stick needs; the cloud/kvm kernel does not.
+packages: [qemu-guest-agent, ca-certificates, curl, linux-generic]
 write_files:
   - path: /opt/zwave-alarm/docker-compose.yml
     content: |
       services:
         zwave-alarm:
-          image: ghcr.io/judeibe/zwave_alarm:latest
+          image: ghcr.io/judeibe/zwave_alarm:main
           container_name: zwave-alarm
           restart: unless-stopped
           devices:
-            - "/dev/serial/by-id/<ZWAVE_CONTROLLER_BY_ID>:/dev/zwave"
+            - "/dev/serial/by-id/__ZWAVE_BY_ID__:/dev/zwave"
           ports: ["3000:3000", "3001:3001"]
           env_file: .env
           environment:
@@ -32,13 +33,23 @@ write_files:
           volumes: [zwave-alarm-data:/app/data]
       volumes:
         zwave-alarm-data:
-  - path: /opt/zwave-alarm/.env
-    permissions: "0600"
-    content: |
-      SESSION_SECRET=<openssl rand -hex 32>
 runcmd:
-  - curl -fsSL https://get.docker.com | sh
-  - systemctl enable --now qemu-guest-agent docker
-  # Only needed while the ghcr.io package is private (PAT with read:packages):
-  # - echo <GHCR_PAT> | docker login ghcr.io -u judeibe --password-stdin
-  - cd /opt/zwave-alarm && docker compose up -d
+  - systemctl enable --now qemu-guest-agent
+  - command -v docker >/dev/null || curl -fsSL https://get.docker.com | sh
+  - systemctl enable --now docker
+  - |
+    cd /opt/zwave-alarm
+    if [ ! -f .env ]; then
+      umask 077
+      printf 'SESSION_SECRET=%s\nHTTP_PORT=3000\nZWAVE_SERVER_PORT=3001\n' "$(openssl rand -hex 32)" > .env
+    fi
+  # The stick appears after the kernel module loads (needs a reboot the first time); pick the first by-id device.
+  - |
+    dev=$(ls /dev/serial/by-id/ 2>/dev/null | head -n1)
+    if [ -n "$dev" ]; then
+      sed -i "s#__ZWAVE_BY_ID__#$dev#" /opt/zwave-alarm/docker-compose.yml
+      cd /opt/zwave-alarm && docker compose up -d
+    fi
+power_state:
+  mode: reboot
+  condition: test ! -e /lib/modules/$(uname -r)/kernel/drivers/usb/class/cdc-acm.ko
