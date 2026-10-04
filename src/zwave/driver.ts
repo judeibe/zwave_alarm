@@ -9,6 +9,14 @@ let startPromise: Promise<void> | undefined;
 /** True only once `start()` has resolved, so shutdown never waits on (or destroys) a half-started driver. */
 let started = false;
 
+function toBytes<K extends string>(keys: Partial<Record<K, string>>): Partial<Record<K, Uint8Array<ArrayBuffer>>> {
+  const bytes: Partial<Record<K, Uint8Array<ArrayBuffer>>> = {};
+  for (const name of Object.keys(keys) as K[]) {
+    bytes[name] = Uint8Array.from(Buffer.from(keys[name]!, 'hex'));
+  }
+  return bytes;
+}
+
 /**
  * Returns the process-wide zwave-js Driver singleton, constructing it (but
  * not starting it) on first access. Per FR-005, this process must be the
@@ -21,7 +29,10 @@ let started = false;
  */
 export function getDriver(): Driver {
   if (!driver) {
-    driver = new Driver(config.serialPort);
+    driver = new Driver(config.serialPort, {
+      securityKeys: toBytes(config.securityKeys),
+      securityKeysLongRange: toBytes(config.securityKeysLongRange),
+    });
 
     driver.on('error', (err) => {
       logger.error('zwave-js driver failed', { error: err.message });
