@@ -1,5 +1,5 @@
-// Conventional Commits 1.0.0 parsing and the SemVer bump it implies:
-// BREAKING CHANGE (footer or `!`) -> major, feat -> minor, fix -> patch, anything else -> none.
+// Parses Conventional Commits 1.0.0 headers and lists commit messages for the commit-lint CI job.
+// Versioning is done by semantic-release (release.config.mjs).
 import { execFileSync } from 'node:child_process';
 
 const HEADER = /^(?<type>[A-Za-z]+)(?:\((?<scope>[^()\r\n]+)\))?(?<bang>!)?: (?<description>\S.*)$/;
@@ -19,31 +19,6 @@ export function parseCommit(message) {
     description,
     breaking: bang === '!' || BREAKING_FOOTER.test(rest.join('\n')),
   };
-}
-
-const RANK = { none: 0, patch: 1, minor: 2, major: 3 };
-
-export function bumpFor(messages) {
-  let bump = 'none';
-  for (const message of messages) {
-    const commit = parseCommit(message);
-    if (!commit) {
-      continue;
-    }
-    const level = commit.breaking ? 'major' : commit.type === 'feat' ? 'minor' : commit.type === 'fix' ? 'patch' : 'none';
-    if (RANK[level] > RANK[bump]) {
-      bump = level;
-    }
-  }
-  return bump;
-}
-
-export function increment(version, bump) {
-  const [major, minor, patch] = version.split('.').map(Number);
-  if (bump === 'major') return `${major + 1}.0.0`;
-  if (bump === 'minor') return `${major}.${minor + 1}.0`;
-  if (bump === 'patch') return `${major}.${minor}.${patch + 1}`;
-  return version;
 }
 
 /** Commit messages in `range` (e.g. v1.0.0..HEAD), merge commits excluded: their text is not a change. */

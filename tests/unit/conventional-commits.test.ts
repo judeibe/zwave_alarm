@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 // @ts-expect-error plain ESM script shared with CI, has no type declarations
-import { bumpFor, increment, parseCommit } from '../../scripts/conventional.mjs';
+import { parseCommit } from '../../scripts/conventional.mjs';
 
 describe('conventional commits', () => {
   it.each([
@@ -14,23 +14,14 @@ describe('conventional commits', () => {
     expect(parseCommit(message)).toBeNull();
   });
 
-  it('maps fix to patch, feat to minor and breaking changes to major, highest wins', () => {
-    expect(bumpFor(['docs: x', 'chore: y'])).toBe('none');
-    expect(bumpFor(['fix: a', 'docs: b'])).toBe('patch');
-    expect(bumpFor(['fix: a', 'feat: b'])).toBe('minor');
-    expect(bumpFor(['feat: b', 'refactor!: c'])).toBe('major');
-    expect(bumpFor(['fix: a\n\nBREAKING CHANGE: drops the old endpoint'])).toBe('major');
-    expect(bumpFor(['chore: a\n\nBREAKING-CHANGE: env var renamed'])).toBe('major');
-  });
-
-  it('ignores non-conventional messages and does not treat prose as a breaking footer', () => {
-    expect(bumpFor(['Merge branch main', 'fix: a\n\nthis is not a BREAKING CHANGE: really'])).toBe('patch');
-  });
-
-  it('increments', () => {
-    expect(increment('1.4.2', 'major')).toBe('2.0.0');
-    expect(increment('1.4.2', 'minor')).toBe('1.5.0');
-    expect(increment('1.4.2', 'patch')).toBe('1.4.3');
-    expect(increment('1.4.2', 'none')).toBe('1.4.2');
+  it('detects breaking changes from the bang and from BREAKING CHANGE footers only', () => {
+    expect(parseCommit('refactor!: c')?.breaking).toBe(true);
+    expect(parseCommit('fix: a\n\nBREAKING CHANGE: drops the old endpoint')?.breaking).toBe(true);
+    expect(parseCommit('chore: a\n\nBREAKING-CHANGE: env var renamed')?.breaking).toBe(true);
+    expect(parseCommit('fix: a\n\nthis is not a BREAKING CHANGE: really')?.breaking).toBe(false);
+    const feat = parseCommit('feat(api): add thing');
+    expect(feat?.type).toBe('feat');
+    expect(feat?.scope).toBe('api');
+    expect(feat?.breaking).toBe(false);
   });
 });
