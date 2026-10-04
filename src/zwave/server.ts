@@ -1,7 +1,7 @@
 import { ZwavejsServer } from '@zwave-js/server';
 import { config } from '../config/index.js';
 import { createLogger } from '../config/logger.js';
-import { getDriver, startDriver } from './driver.js';
+import { getDriver, startDriver, waitForDriverReady } from './driver.js';
 
 const logger = createLogger('zwave/server');
 
@@ -49,6 +49,7 @@ export function getZwaveJsServer(): ZwavejsServer {
 export function startZwaveJsServer(): Promise<void> {
   if (!startPromise) {
     startPromise = startDriver()
+      .then(() => waitForDriverReady())
       .then(() => getZwaveJsServer().start())
       .then(() => {
         started = true;

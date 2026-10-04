@@ -4,7 +4,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const mockDriverStart = vi.fn(() => Promise.resolve());
 
 class MockDriver extends EventEmitter {
+  ready = false;
   start = mockDriverStart;
+}
+
+/** Emits "driver ready" on the singleton later, like zwave-js does after the interview. */
+function markReadyLater(driver: unknown, ms = 0) {
+  setTimeout(() => {
+    (driver as MockDriver).ready = true;
+    (driver as MockDriver).emit('driver ready');
+  }, ms);
 }
 
 const DriverCtor = vi.fn(function Driver() {
@@ -85,6 +94,8 @@ describe('zwave-js-server bootstrap', () => {
 
   it('starts the driver before starting the zwave-js-server', async () => {
     const { startZwaveJsServer } = await import('../../src/zwave/server.js');
+    const { getDriver } = await import('../../src/zwave/driver.js');
+    markReadyLater(getDriver());
 
     await startZwaveJsServer();
 
@@ -97,8 +108,40 @@ describe('zwave-js-server bootstrap', () => {
 
   it('starts the server exactly once even when startZwaveJsServer is called concurrently', async () => {
     const { startZwaveJsServer } = await import('../../src/zwave/server.js');
+    const { getDriver } = await import('../../src/zwave/driver.js');
+    markReadyLater(getDriver());
 
     await Promise.all([startZwaveJsServer(), startZwaveJsServer(), startZwaveJsServer()]);
+
+    expect(mockServerStart).toHaveBeenCalledTimes(1);
+  });
+
+  it('waits for "driver ready" before starting the server (start() resolves earlier)', async () => {
+    vi.useFakeTimers();
+    try {
+      const { startZwaveJsServer } = await import('../../src/zwave/server.js');
+      const { getDriver } = await import('../../src/zwave/driver.js');
+      markReadyLater(getDriver(), 20_000);
+
+      const started = startZwaveJsServer();
+      await vi.advanceTimersByTimeAsync(19_000);
+      expect(mockDriverStart).toHaveBeenCalledTimes(1);
+      expect(mockServerStart).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(2_000);
+      await started;
+      expect(mockServerStart).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('starts the server immediately when the driver is already ready', async () => {
+    const { startZwaveJsServer } = await import('../../src/zwave/server.js');
+    const { getDriver } = await import('../../src/zwave/driver.js');
+    (getDriver() as unknown as MockDriver).ready = true;
+
+    await startZwaveJsServer();
 
     expect(mockServerStart).toHaveBeenCalledTimes(1);
   });
