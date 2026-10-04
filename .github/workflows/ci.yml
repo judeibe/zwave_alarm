@@ -5,12 +5,19 @@ on:
     branches: [main]
     tags: ["v*.*.*"]
   pull_request:
+  # Manual run on main: same release as a push, optionally forcing the bump instead of reading the commits.
   workflow_dispatch:
+    inputs:
+      bump:
+        description: Semver part to increment (auto reads the Conventional Commits since the last tag)
+        type: choice
+        options: [auto, patch, minor, major]
+        default: auto
 
 # One run per ref; a newer push cancels the stale one (but never cancels a tag/release publish).
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' || (github.event_name == 'push' && !startsWith(github.ref, 'refs/tags/')) }}
 
 # Least privilege by default; jobs that need more declare it themselves.
 permissions:
@@ -39,9 +46,70 @@ jobs:
       - run: npx tsc --noEmit
       - run: npm test
 
+  # Every commit must follow Conventional Commits (https://www.conventionalcommits.org/en/v1.0.0/).
+  commits:
+    name: Conventional commits
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
+      - run: node scripts/lint-commits.mjs ${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}
+
+  # On main, derives the next version from the Conventional Commits since the last tag:
+  # BREAKING CHANGE (or "!") -> major, feat -> minor, fix -> patch; other types do not release.
+  # It then bumps package.json, package-lock.json and the HA manifest together, commits, tags vX.Y.Z and
+  # creates the GitHub release. Pushes made with GITHUB_TOKEN do not trigger new runs, so the docker job
+  # below publishes this release itself. The first run, with no tag yet, releases package.json's version as is.
+  release:
+    name: Version and tag
+    needs: test
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write # push the version commit and tag, create the GitHub release
+    outputs:
+      tag: ${{ steps.next.outputs.released == 'true' && format('v{0}', steps.next.outputs.version) || '' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # the commit history and tags decide the version
+
+      - id: next
+        env:
+          BUMP: ${{ inputs.bump || 'auto' }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          node scripts/next-version.mjs "$BUMP" | tee next.txt
+          bump=$(sed -n 's/^bump=//p' next.txt); version=$(sed -n 's/^version=//p' next.txt); rm next.txt
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          if [ "$bump" = none ]; then
+            echo "No fix, feat or breaking commits since the last tag: nothing to release."
+            echo "released=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          if git ls-remote --exit-code --tags origin "refs/tags/v${version}" >/dev/null; then
+            echo "::error::tag v${version} already exists"; exit 1
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if [ "$bump" != initial ]; then
+            node scripts/set-version.mjs "$version"
+            git commit -am "chore(release): v${version}"
+          fi
+          git tag -a "v${version}" -m "v${version}"
+          git push origin HEAD:main "v${version}"
+          gh release create "v${version}" --title "v${version}" --generate-notes
+          echo "released=true" >> "$GITHUB_OUTPUT"
+
   docker:
     name: Build and push image
-    needs: test
+    needs: [test, release]
+    # release is skipped on everything but manual runs, which must not skip the build.
+    if: ${{ !cancelled() && needs.test.result == 'success' && needs.release.result != 'failure' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -51,6 +119,16 @@ jobs:
       attestations: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          # A release build uses the commit that carries the bumped version.
+          ref: ${{ needs.release.outputs.tag || github.sha }}
+
+      # A hand-pushed tag must match the files, or the image would claim a version the code does not have.
+      - name: Check tag matches package version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          [ "v$(node -p "require('./package.json').version")" = "${GITHUB_REF_NAME}" ] \
+            || { echo "::error::tag ${GITHUB_REF_NAME} does not match package.json; use the Release run instead"; exit 1; }
 
       - uses: docker/setup-buildx-action@v3
 
@@ -70,8 +148,9 @@ jobs:
           tags: |
             type=ref,event=branch
             type=ref,event=pr
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{version}},value=${{ needs.release.outputs.tag }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ needs.release.outputs.tag }}
+            type=semver,pattern={{major}},value=${{ needs.release.outputs.tag }}
             type=sha,format=short
             type=raw,value=latest,enable={{is_default_branch}}
 
