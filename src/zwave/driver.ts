@@ -60,6 +60,19 @@ export function startDriver(): Promise<void> {
 }
 
 /**
+ * Resolves once zwave-js has finished its startup interview ("driver ready"). `start()` resolves as
+ * soon as the serial port is open, which is well before that (about 20 s on a populated network), and
+ * `ZwavejsServer.start()` throws "Cannot start server when driver not ready" if called in between.
+ */
+export function waitForDriverReady(): Promise<void> {
+  const d = getDriver();
+  if (d.ready) {
+    return Promise.resolve();
+  }
+  return new Promise((resolve) => d.once('driver ready', () => resolve()));
+}
+
+/**
  * Releases the serial port and stops the driver, for graceful shutdown. A no-op if the driver was
  * never finished starting (e.g. no controller was attached, or shutdown arrived mid-start), since
  * there is then nothing open to release.

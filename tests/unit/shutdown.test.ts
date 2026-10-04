@@ -5,6 +5,8 @@ import { createShutdown } from '../../src/shutdown.js';
 const mockDriverStart = vi.fn<() => Promise<void>>();
 const mockDriverDestroy = vi.fn(() => Promise.resolve());
 class MockDriver extends EventEmitter {
+  // Ready as soon as it has started, so the server's wait-for-"driver ready" resolves immediately.
+  ready = true;
   start = mockDriverStart;
   destroy = mockDriverDestroy;
 }
