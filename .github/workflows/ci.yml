@@ -135,7 +135,7 @@ jobs:
       # Only log in when we will push; PRs (incl. forks) just verify the image builds.
       - name: Log in to ghcr.io
         if: github.event_name != 'pull_request'
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
