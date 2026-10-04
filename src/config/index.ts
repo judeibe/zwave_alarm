@@ -13,7 +13,13 @@ export interface AppConfig {
   exitDelaySeconds: number;
   /** Seconds between a breach and the alarm triggering (FR-004). One value for the whole panel. */
   entryDelaySeconds: number;
+  /** Z-Wave network keys (hex, 16 bytes each) from the environment. Omitted keys are left to zwave-js. */
+  securityKeys: Partial<Record<SecurityKeyName, string>>;
+  securityKeysLongRange: Partial<Record<LongRangeKeyName, string>>;
 }
+
+export type SecurityKeyName = 'S2_Unauthenticated' | 'S2_Authenticated' | 'S2_AccessControl' | 'S0_Legacy';
+export type LongRangeKeyName = 'S2_Authenticated' | 'S2_AccessControl';
 
 export class ConfigError extends Error {}
 
@@ -80,6 +86,33 @@ function parseSirenNodeId(value: string): number {
   return nodeId;
 }
 
+const SECURITY_KEY_ENV: Record<SecurityKeyName, string> = {
+  S2_Unauthenticated: 'ZWAVE_KEY_S2_UNAUTHENTICATED',
+  S2_Authenticated: 'ZWAVE_KEY_S2_AUTHENTICATED',
+  S2_AccessControl: 'ZWAVE_KEY_S2_ACCESS_CONTROL',
+  S0_Legacy: 'ZWAVE_KEY_S0_LEGACY',
+};
+const LONG_RANGE_KEY_ENV: Record<LongRangeKeyName, string> = {
+  S2_Authenticated: 'ZWAVE_LR_KEY_S2_AUTHENTICATED',
+  S2_AccessControl: 'ZWAVE_LR_KEY_S2_ACCESS_CONTROL',
+};
+
+/** Reads optional 16-byte hex keys; the error names the variable but never echoes the key. */
+function parseKeys<K extends string>(envNames: Record<K, string>): Partial<Record<K, string>> {
+  const keys: Partial<Record<K, string>> = {};
+  for (const [name, envName] of Object.entries<string>(envNames)) {
+    const raw = process.env[envName];
+    if (raw === undefined || raw === '') {
+      continue;
+    }
+    if (!/^[0-9a-fA-F]{32}$/.test(raw)) {
+      throw new ConfigError(`${envName} must be exactly 32 hexadecimal characters (16 bytes)`);
+    }
+    keys[name as K] = raw.toLowerCase();
+  }
+  return keys;
+}
+
 function loadConfig(): AppConfig {
   const missing = REQUIRED_VARS.filter((name) => readEnv(name) === undefined);
   if (missing.length > 0) {
@@ -119,6 +152,8 @@ function loadConfig(): AppConfig {
     sirenNodeId,
     exitDelaySeconds: parseDelaySeconds('EXIT_DELAY_SECONDS'),
     entryDelaySeconds: parseDelaySeconds('ENTRY_DELAY_SECONDS'),
+    securityKeys: parseKeys(SECURITY_KEY_ENV),
+    securityKeysLongRange: parseKeys(LONG_RANGE_KEY_ENV),
   };
 }
 

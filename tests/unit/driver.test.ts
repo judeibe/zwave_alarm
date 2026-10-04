@@ -47,7 +47,7 @@ describe('zwave driver singleton', () => {
     const first = getDriver();
     const second = getDriver();
     expect(DriverCtor).toHaveBeenCalledTimes(1);
-    expect(DriverCtor).toHaveBeenCalledWith('/dev/ttyACM0');
+    expect(DriverCtor).toHaveBeenCalledWith('/dev/ttyACM0', { securityKeys: {}, securityKeysLongRange: {} });
     expect(first).toBe(second);
   });
 

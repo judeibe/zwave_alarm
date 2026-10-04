@@ -129,6 +129,8 @@ describe('config loader', () => {
       sirenNodeId: null,
       exitDelaySeconds: 30,
       entryDelaySeconds: 30,
+      securityKeys: {},
+      securityKeysLongRange: {},
     });
   });
 
@@ -172,5 +174,39 @@ describe('config loader', () => {
   it('rejects HTTP_PORT and ZWAVE_SERVER_PORT collisions', async () => {
     setEnv({ ZWAVE_SERVER_PORT: '3000' });
     await expect(import('../../src/config/index.js')).rejects.toThrow(/must be different/);
+  });
+
+  describe('Z-Wave security keys', () => {
+    afterEach(() => {
+      delete process.env.ZWAVE_KEY_S0_LEGACY;
+      delete process.env.ZWAVE_LR_KEY_S2_ACCESS_CONTROL;
+    });
+
+    it('defaults to no keys', async () => {
+      setEnv();
+      const { config } = await import('../../src/config/index.js');
+      expect(config.securityKeys).toEqual({});
+      expect(config.securityKeysLongRange).toEqual({});
+    });
+
+    it('reads keys from the environment, lower-cased', async () => {
+      setEnv();
+      process.env.ZWAVE_KEY_S0_LEGACY = '86EA21E90949AFA756A48FBD74A399F1';
+      process.env.ZWAVE_LR_KEY_S2_ACCESS_CONTROL = 'a'.repeat(32);
+      const { config } = await import('../../src/config/index.js');
+      expect(config.securityKeys).toEqual({ S0_Legacy: '86ea21e90949afa756a48fbd74a399f1' });
+      expect(config.securityKeysLongRange).toEqual({ S2_AccessControl: 'a'.repeat(32) });
+    });
+
+    it('rejects a malformed key without echoing it', async () => {
+      setEnv();
+      process.env.ZWAVE_KEY_S0_LEGACY = 'not-hex-not-hex-not-hex-not-hex-1';
+      const failure = await import('../../src/config/index.js').then(
+        () => undefined,
+        (err: unknown) => err as Error,
+      );
+      expect(failure?.message).toMatch(/ZWAVE_KEY_S0_LEGACY must be exactly 32 hexadecimal/);
+      expect(failure?.message).not.toContain('not-hex');
+    });
   });
 });
