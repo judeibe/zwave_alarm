@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "skills": {
+    "cv4pve-cli": {
+      "source": "Corsinvest/cv4pve-cli",
+      "sourceType": "github",
+      "skillPath": "skills/cv4pve-cli/SKILL.md",
+      "computedHash": "8d4156cbfa124ff38dc67d1f9645c49c8a271e1f1de12dc3a321c6c033dfd58f"
+    }
+  }
+}
