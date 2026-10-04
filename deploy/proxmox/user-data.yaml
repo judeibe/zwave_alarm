@@ -1,0 +1,44 @@
+#cloud-config
+# Proxmox "snippets" cloud-init user-data for the zwave-alarm VM (Ubuntu Server + Docker).
+# Replace the <PLACEHOLDERS> before uploading to a snippets-enabled storage.
+hostname: zwave-alarm
+manage_etc_hosts: true
+package_update: true
+package_upgrade: true
+users:
+  - name: ubuntu
+    groups: [sudo, docker]
+    shell: /bin/bash
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    lock_passwd: true
+    ssh_authorized_keys:
+      - <YOUR_SSH_PUBLIC_KEY>
+packages: [qemu-guest-agent, ca-certificates, curl]
+write_files:
+  - path: /opt/zwave-alarm/docker-compose.yml
+    content: |
+      services:
+        zwave-alarm:
+          image: ghcr.io/judeibe/zwave_alarm:latest
+          container_name: zwave-alarm
+          restart: unless-stopped
+          devices:
+            - "/dev/serial/by-id/<ZWAVE_CONTROLLER_BY_ID>:/dev/zwave"
+          ports: ["3000:3000", "3001:3001"]
+          env_file: .env
+          environment:
+            SERIAL_PORT: /dev/zwave
+            DB_PATH: /app/data/alarm.db
+          volumes: [zwave-alarm-data:/app/data]
+      volumes:
+        zwave-alarm-data:
+  - path: /opt/zwave-alarm/.env
+    permissions: "0600"
+    content: |
+      SESSION_SECRET=<openssl rand -hex 32>
+runcmd:
+  - curl -fsSL https://get.docker.com | sh
+  - systemctl enable --now qemu-guest-agent docker
+  # Only needed while the ghcr.io package is private (PAT with read:packages):
+  # - echo <GHCR_PAT> | docker login ghcr.io -u judeibe --password-stdin
+  - cd /opt/zwave-alarm && docker compose up -d
