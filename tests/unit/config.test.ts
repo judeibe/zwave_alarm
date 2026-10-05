@@ -131,6 +131,7 @@ describe('config loader', () => {
       entryDelaySeconds: 30,
       securityKeys: {},
       securityKeysLongRange: {},
+      keypadRequireCodeToArm: false,
     });
   });
 

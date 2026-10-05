@@ -1,6 +1,7 @@
 import { createServer } from 'node:http';
 import { mkdirSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { config } from './config/index.js';
 import { createLogger } from './config/logger.js';
 import { createDatabase } from './db/schema.js';
@@ -23,6 +24,11 @@ import { UserRepository } from './auth/user-repository.js';
 import { LockoutPolicyRepository } from './auth/lockout-policy-repository.js';
 import { LockoutService } from './auth/lockout-service.js';
 import { HaLinkRepository } from './db/repositories/ha-link-repository.js';
+import { KeypadAdapterRegistry } from './keypads/keypad-registry.js';
+import { discoverKeypadAdapters } from './keypads/discovery.js';
+import { KeypadService } from './keypads/keypad-service.js';
+import { KeypadController } from './keypads/keypad-controller.js';
+import { KeypadGateway } from './zwave/keypad-gateway.js';
 
 const logger = createLogger('index');
 
@@ -55,10 +61,26 @@ driver.once('driver ready', () => {
   sensorMapper.start();
   // A siren state that had to wait for the driver (e.g. alarm_triggered restored after a restart).
   siren.sync();
+  // Keypads: load the adapters first so a node's identity can be matched as soon as it's attached.
+  discoverKeypadAdapters(KEYPAD_ADAPTERS_DIR, keypadRegistry)
+    .then(() => keypadGateway.start())
+    .catch((err: unknown) => {
+      logger.error('keypad support failed to start', { error: err instanceof Error ? err.message : String(err) });
+    });
 });
 const siren = new Siren(driver, panelService, { nodeId: config.sirenNodeId });
 
-const app = createApp({ panelService, userRepo, zoneRepo, sensorRepo, lockoutService, eventRepo, haLinkRepo, driver });
+// Keypads (src/keypads): adapters are auto-discovered from this directory, so supporting a new
+// keypad means adding a file there, not editing this one.
+const KEYPAD_ADAPTERS_DIR = join(dirname(fileURLToPath(import.meta.url)), 'keypads', 'adapters');
+const keypadRegistry = new KeypadAdapterRegistry();
+const keypadService = new KeypadService((nodeId, writes) => keypadGateway.writeValues(nodeId, writes));
+const keypadGateway: KeypadGateway = new KeypadGateway(driver, keypadRegistry, keypadService);
+new KeypadController(keypadService, panelService, userRepo, lockoutService, eventRepo, zoneRepo, {
+  requireCodeToArm: config.keypadRequireCodeToArm,
+}).start();
+
+const app = createApp({ panelService, userRepo, zoneRepo, sensorRepo, lockoutService, eventRepo, haLinkRepo, driver, keypadService });
 const httpServer = createServer(app);
 
 // Shares the REST API's HTTP server/port, per contracts/websocket-events.md's
@@ -70,9 +92,9 @@ const wss = createWebSocketServer(
     path: '/api/v1/stream',
     verifyClient: createWsVerifyClient({ haLinkLookup: haLinkRepo, sessionMiddleware }),
   },
-  () => buildLiveSnapshot({ panelService, zoneRepo }),
+  () => buildLiveSnapshot({ panelService, zoneRepo, keypadService }),
 );
-attachWsBroadcaster(wss, { panelService, sensorMapper, eventRepo, zoneRepo });
+attachWsBroadcaster(wss, { panelService, sensorMapper, eventRepo, zoneRepo, keypadService });
 
 // After the siren and broadcaster are listening: re-schedules an exit/entry delay that was in
 // flight when the service last stopped (SC-006), which may itself commit a transition.
