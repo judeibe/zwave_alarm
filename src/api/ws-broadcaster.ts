@@ -5,12 +5,15 @@ import type { SensorMapper } from '../zwave/sensor-mapper.js';
 import type { SensorDevice } from '../db/repositories/sensor-repository.js';
 import type { ZoneRepository } from '../db/repositories/zone-repository.js';
 import { EventRepository, type SecurityEvent } from '../events/event-repository.js';
+import type { KeypadPublicEvent, KeypadService, KeypadSummary } from '../keypads/keypad-service.js';
 
 export interface WsBroadcasterDeps {
   panelService: PanelService;
   sensorMapper: SensorMapper;
   eventRepo: EventRepository;
   zoneRepo: ZoneRepository;
+  /** Optional: keypad events and the snapshot's `keypads` are only sent when supplied. */
+  keypadService?: KeypadService;
 }
 
 /**
@@ -18,12 +21,13 @@ export interface WsBroadcasterDeps {
  * live state, for use as `src/api/ws.ts`'s `createWebSocketServer`
  * `buildSnapshot` argument.
  */
-export function buildLiveSnapshot(deps: Pick<WsBroadcasterDeps, 'panelService' | 'zoneRepo'>): Record<string, unknown> {
+export function buildLiveSnapshot(deps: Pick<WsBroadcasterDeps, 'panelService' | 'zoneRepo' | 'keypadService'>): Record<string, unknown> {
   const panel = deps.panelService.getState();
   return {
     type: 'snapshot',
     panel: { mode: panel.mode, pendingDelayEndsAt: panel.pendingDelayEndsAt, disarmedZoneIds: panel.disarmedZoneIds },
     zones: deps.zoneRepo.list(),
+    ...(deps.keypadService && { keypads: deps.keypadService.list() }),
   };
 }
 
@@ -87,6 +91,15 @@ export function attachWsBroadcaster(wss: WebSocketServer, deps: WsBroadcasterDep
       connectivityStatus: sensor.connectivityStatus,
       batteryLevel: sensor.batteryLevel,
     });
+  });
+
+  deps.keypadService?.on('keypad_changed', (keypad: KeypadSummary) => {
+    broadcast(wss, { type: 'keypad.changed', keypad });
+  });
+
+  // The service's public event never carries the entered code, so it is safe to fan out as-is.
+  deps.keypadService?.on('keypad_event', (event: KeypadPublicEvent) => {
+    broadcast(wss, { type: 'keypad.event', nodeId: event.nodeId, adapterId: event.adapterId, input: event.input });
   });
 
   deps.eventRepo.on('event_recorded', (event: SecurityEvent) => {

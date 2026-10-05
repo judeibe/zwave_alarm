@@ -19,6 +19,8 @@ import { createUserRouter } from './routes/user-routes.js';
 import { createEventRouter } from './routes/event-routes.js';
 import { createHaLinkRouter } from './routes/ha-link-routes.js';
 import { createLockoutPolicyRouter } from './routes/lockout-policy-routes.js';
+import { createKeypadRouter } from './routes/keypad-routes.js';
+import type { KeypadService } from '../keypads/keypad-service.js';
 
 /**
  * Thrown by route handlers to produce the `{ error: { code, message } }`
@@ -87,6 +89,8 @@ export interface AppDeps {
   lockoutService: LockoutService;
   eventRepo: EventRepository;
   haLinkRepo: HaLinkRepository;
+  /** Optional: the keypad routes (`/keypads`) are mounted only when supplied. */
+  keypadService?: KeypadService;
   /** Only `controller.nodes` is read (zone-routes.ts validates an assigned zwaveNodeId against it). */
   driver: Pick<Driver, 'controller'>;
 }
@@ -144,6 +148,9 @@ export function createApp(deps?: AppDeps): Express {
     app.use('/api/v1', createEventRouter(routeDeps));
     app.use('/api/v1', createHaLinkRouter(routeDeps));
     app.use('/api/v1', createLockoutPolicyRouter(routeDeps));
+    if (deps.keypadService) {
+      app.use('/api/v1', createKeypadRouter({ keypadService: deps.keypadService }));
+    }
   }
 
   // eslint-disable-next-line @typescript-eslint/no-unused-vars -- Express only recognizes error middleware with all four parameters present.
