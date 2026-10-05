@@ -11,6 +11,7 @@ export type ZoneSensor = SensorDevice;
 export interface Zone {
   id: string;
   name: string;
+  description: string | null;
   createdAt: number;
   sensors: ZoneSensor[];
 }
@@ -18,6 +19,7 @@ export interface Zone {
 interface ZoneSensorRow {
   id: string;
   name: string;
+  description: string | null;
   created_at: number;
   sensor_id: string | null;
   sensor_zwave_node_id: number | null;
@@ -50,17 +52,44 @@ export class ZoneRepository extends Repository {
     super(db);
   }
 
-  create(name: string): Zone {
-    const zone: Zone = { id: randomUUID(), name, createdAt: Date.now(), sensors: [] };
-    this.run('INSERT INTO zones (id, name, created_at) VALUES (?, ?, ?)', zone.id, zone.name, zone.createdAt);
+  create(name: string, description: string | null = null): Zone {
+    const zone: Zone = { id: randomUUID(), name, description, createdAt: Date.now(), sensors: [] };
+    this.run(
+      'INSERT INTO zones (id, name, description, created_at) VALUES (?, ?, ?, ?)',
+      zone.id,
+      zone.name,
+      zone.description,
+      zone.createdAt,
+    );
     return zone;
+  }
+
+  /** Looks up one zone with its sensors, or undefined. */
+  findById(id: string): Zone | undefined {
+    return this.list().find((zone) => zone.id === id);
+  }
+
+  /** Case-insensitive name lookup, used to keep zone names unique. */
+  findByName(name: string): Zone | undefined {
+    return this.list().find((zone) => zone.name.toLowerCase() === name.toLowerCase());
+  }
+
+  /** Applies `changes` to an existing zone; throws `zone <id> not found` when absent. */
+  update(id: string, changes: { name?: string; description?: string | null }): Zone {
+    const zone = this.findById(id);
+    if (!zone) {
+      throw new Error(`zone ${id} not found`);
+    }
+    const next = { ...zone, ...changes };
+    this.run('UPDATE zones SET name = ?, description = ? WHERE id = ?', next.name, next.description, id);
+    return next;
   }
 
   /** Lists all zones ordered by creation time, each with its sensor_devices joined in. */
   list(): Zone[] {
     const rows = this.all<ZoneSensorRow>(
       `SELECT
-         z.id AS id, z.name AS name, z.created_at AS created_at,
+         z.id AS id, z.name AS name, z.description AS description, z.created_at AS created_at,
          s.id AS sensor_id, s.zwave_node_id AS sensor_zwave_node_id, s.zone_id AS sensor_zone_id,
          s.name AS sensor_name, s.category AS sensor_category, s.current_state AS sensor_current_state,
          s.battery_level AS sensor_battery_level, s.connectivity_status AS sensor_connectivity_status,
@@ -74,7 +103,7 @@ export class ZoneRepository extends Repository {
     for (const row of rows) {
       let zone = zonesById.get(row.id);
       if (!zone) {
-        zone = { id: row.id, name: row.name, createdAt: row.created_at, sensors: [] };
+        zone = { id: row.id, name: row.name, description: row.description, createdAt: row.created_at, sensors: [] };
         zonesById.set(row.id, zone);
       }
       if (row.sensor_id) {
@@ -85,6 +114,10 @@ export class ZoneRepository extends Repository {
   }
 
   delete(id: string): void {
-    this.run('DELETE FROM zones WHERE id = ?', id);
+    // The event log is append-only: keep past events, drop only their link to the removed zone.
+    this.transaction(() => {
+      this.run('UPDATE security_events SET related_zone_id = NULL WHERE related_zone_id = ?', id);
+      this.run('DELETE FROM zones WHERE id = ?', id);
+    })();
   }
 }

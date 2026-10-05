@@ -15,8 +15,24 @@ export const codeBodySchema = z.object({ code });
 /** `POST /api/v1/panel/arm` body. */
 export const armBodySchema = z.object({ mode: z.enum(['armed_away', 'armed_home']) });
 
+const description = z.string().max(500);
+const nonEmpty = (body: object): boolean => Object.keys(body).length > 0;
+const NON_EMPTY_MESSAGE = 'must include at least one field to change';
+
 /** `POST /api/v1/zones` body. */
-export const createZoneBodySchema = z.object({ name });
+export const createZoneBodySchema = z.object({ name, description: description.nullable().optional() });
+
+/** `PATCH /api/v1/zones/{zoneId}` body. */
+export const updateZoneBodySchema = z
+  .object({ name, description: description.nullable() })
+  .partial()
+  .refine(nonEmpty, NON_EMPTY_MESSAGE);
+
+/** `PATCH /api/v1/sensors/{sensorId}` body. */
+export const updateSensorBodySchema = z
+  .object({ name, category: z.enum(['intrusion', 'life-safety']), zoneId: z.string().min(1) })
+  .partial()
+  .refine(nonEmpty, NON_EMPTY_MESSAGE);
 
 /** `POST /api/v1/zones/{zoneId}/sensors` body. */
 export const assignSensorBodySchema = z.object({
@@ -33,14 +49,38 @@ const guestExpiresAt = z
   ])
   .transform((value) => (typeof value === 'number' ? value : Date.parse(value)));
 
-/** `POST /api/v1/users` body. */
+const haId = z.string().min(1).max(MAX_NAME_LENGTH);
+const role = z.enum(['administrator', 'member', 'guest']);
+
+/** `POST /api/v1/users` body. `code` may be omitted; the user then has no code until `PUT /users/{id}/code`. */
 export const createUserBodySchema = z.object({
   name,
-  role: z.enum(['administrator', 'member', 'guest']),
-  code,
+  role,
+  code: code.optional(),
+  haPersonId: haId.optional(),
+  haUserId: haId.optional(),
   guestExpiresAt: guestExpiresAt.optional(),
   guestZoneId: z.string().min(1).optional(),
 });
+
+/** `PATCH /api/v1/users/{userId}` body (never carries a code). `null` clears a nullable field. */
+export const updateUserBodySchema = z
+  .object({
+    name,
+    role,
+    haPersonId: haId.nullable(),
+    haUserId: haId.nullable(),
+    guestExpiresAt: guestExpiresAt.nullable(),
+    guestZoneId: z.string().min(1).nullable(),
+  })
+  .partial()
+  .refine(nonEmpty, NON_EMPTY_MESSAGE);
+
+/** `GET /api/v1/users` query string. */
+export const usersQuerySchema = z.object({ haPersonId: haId.optional() });
+
+/** `GET /api/v1/zones/{zoneId}` ... `DELETE /api/v1/zones/{zoneId}` query string. */
+export const deleteZoneQuerySchema = z.object({ force: z.enum(['true', 'false']).optional() });
 
 /** `POST /api/v1/ha-links` body. */
 export const createHaLinkBodySchema = z.object({ label: name });

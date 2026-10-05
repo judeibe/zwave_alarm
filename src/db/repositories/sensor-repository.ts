@@ -128,6 +128,38 @@ export class SensorRepository extends Repository {
     return next;
   }
 
+  findById(id: string): SensorDevice | undefined {
+    const row = this.get<SensorDeviceRow>('SELECT * FROM sensor_devices WHERE id = ?', id);
+    return row ? toDomain(row) : undefined;
+  }
+
+  /** Changes a sensor's name, category and/or zone; throws `sensor <id> not found` when absent. */
+  updateConfig(id: string, changes: Partial<Pick<SensorDevice, 'name' | 'category' | 'zoneId'>>): SensorDevice {
+    const current = this.findById(id);
+    if (!current) {
+      throw new Error(`sensor ${id} not found`);
+    }
+    const next: SensorDevice = { ...current, ...changes, updatedAt: Date.now() };
+    this.run(
+      'UPDATE sensor_devices SET name = ?, category = ?, zone_id = ?, updated_at = ? WHERE id = ?',
+      next.name,
+      next.category,
+      next.zoneId,
+      next.updatedAt,
+      id,
+    );
+    return next;
+  }
+
+  /** Unassigns a sensor (the zwave-js node itself is untouched). */
+  delete(id: string): void {
+    // The event log is append-only: keep past events, drop only their link to the removed sensor.
+    this.transaction(() => {
+      this.run('UPDATE security_events SET related_sensor_id = NULL WHERE related_sensor_id = ?', id);
+      this.run('DELETE FROM sensor_devices WHERE id = ?', id);
+    })();
+  }
+
   /** Looks up the sensor assigned to a given zwave-js node, if any (T024's sensor-mapper resolves nodes this way). */
   findByNodeId(zwaveNodeId: number): SensorDevice | undefined {
     const row = this.get<SensorDeviceRow>('SELECT * FROM sensor_devices WHERE zwave_node_id = ?', zwaveNodeId);

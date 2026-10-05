@@ -1,16 +1,36 @@
 import { Router } from 'express';
-import type { Driver } from 'zwave-js';
+import { NodeStatus, type Driver } from 'zwave-js';
 import { ApiError } from '../app.js';
-import { assignSensorBodySchema, createZoneBodySchema, validateBody } from '../validation.js';
+import {
+  assignSensorBodySchema,
+  createZoneBodySchema,
+  deleteZoneQuerySchema,
+  parsedQuery,
+  updateSensorBodySchema,
+  updateZoneBodySchema,
+  validateBody,
+  validateQuery,
+} from '../validation.js';
 import { requireAuth, requireRole } from '../../auth/authorize.js';
+import type { UserRepository } from '../../auth/user-repository.js';
 import type { ZoneRepository } from '../../db/repositories/zone-repository.js';
 import type { SensorCategory, SensorRepository } from '../../db/repositories/sensor-repository.js';
 
 export interface ZoneRouteDeps {
   zoneRepo: ZoneRepository;
   sensorRepo: SensorRepository;
+  userRepo: UserRepository;
   /** Only `controller.nodes` is read (to validate a zwaveNodeId is known before assigning it). */
   driver: Pick<Driver, 'controller'>;
+}
+
+interface DiscoverableNode {
+  zwaveNodeId: number;
+  name: string | null;
+  manufacturer: string | null;
+  product: string | null;
+  suggestedCategory: SensorCategory | null;
+  status: 'alive' | 'dead' | 'asleep';
 }
 
 interface AssignSensorBody {
@@ -32,7 +52,7 @@ interface AssignSensorBody {
  * errors (FK violation / duplicate-node rejection respectively) and are
  * mapped to 404/409 here rather than a generic 500.
  */
-export function createZoneRouter({ zoneRepo, sensorRepo, driver }: ZoneRouteDeps): Router {
+export function createZoneRouter({ zoneRepo, sensorRepo, userRepo, driver }: ZoneRouteDeps): Router {
   const router = Router();
 
   router.get('/zones', requireAuth, requireRole('administrator', 'member'), (_req, res) => {
@@ -40,8 +60,99 @@ export function createZoneRouter({ zoneRepo, sensorRepo, driver }: ZoneRouteDeps
   });
 
   router.post('/zones', requireAuth, requireRole('administrator'), validateBody(createZoneBodySchema), (req, res) => {
-    const { name } = req.body as { name: string };
-    res.status(201).json(zoneRepo.create(name));
+    const { name, description } = req.body as { name: string; description?: string | null };
+    if (zoneRepo.findByName(name)) {
+      throw new ApiError(409, 'conflict', `A zone named "${name}" already exists.`);
+    }
+    res.status(201).json(zoneRepo.create(name, description ?? null));
+  });
+
+  router.patch(
+    '/zones/:zoneId',
+    requireAuth,
+    requireRole('administrator'),
+    validateBody(updateZoneBodySchema),
+    (req, res) => {
+      const changes = req.body as { name?: string; description?: string | null };
+      if (!zoneRepo.findById(req.params.zoneId)) {
+        throw new ApiError(404, 'not_found', `Zone ${req.params.zoneId} does not exist.`);
+      }
+      const clash = changes.name === undefined ? undefined : zoneRepo.findByName(changes.name);
+      if (clash && clash.id !== req.params.zoneId) {
+        throw new ApiError(409, 'conflict', `A zone named "${changes.name}" already exists.`);
+      }
+      res.status(200).json(zoneRepo.update(req.params.zoneId, changes));
+    },
+  );
+
+  router.delete(
+    '/zones/:zoneId',
+    requireAuth,
+    requireRole('administrator'),
+    validateQuery(deleteZoneQuerySchema),
+    (req, res) => {
+      const { force } = parsedQuery<{ force?: 'true' | 'false' }>(res);
+      const zone = zoneRepo.findById(req.params.zoneId);
+      if (!zone) {
+        throw new ApiError(404, 'not_found', `Zone ${req.params.zoneId} does not exist.`);
+      }
+      if (userRepo.list().some((user) => user.guestZoneId === zone.id)) {
+        throw new ApiError(409, 'zone_in_use', 'A guest is restricted to this zone; change or remove the guest first.');
+      }
+      if (zone.sensors.length > 0 && force !== 'true') {
+        throw new ApiError(409, 'zone_not_empty', 'The zone still has sensors; move them or pass ?force=true.');
+      }
+      for (const sensor of zone.sensors) {
+        sensorRepo.delete(sensor.id);
+      }
+      zoneRepo.delete(zone.id);
+      res.status(204).send();
+    },
+  );
+
+  router.get('/sensors/discoverable', requireAuth, requireRole('administrator'), (_req, res) => {
+    let nodes: DiscoverableNode[];
+    try {
+      nodes = [...driver.controller.nodes.values()]
+        .filter((node) => !node.isControllerNode && sensorRepo.findByNodeId(node.nodeId) === undefined)
+        .map((node) => ({
+          zwaveNodeId: node.nodeId,
+          name: node.name ?? null,
+          manufacturer: node.deviceConfig?.manufacturer ?? null,
+          product: node.deviceConfig?.label ?? null,
+          // Reserved: no reliable signal from zwave-js yet, so the admin always picks the category.
+          suggestedCategory: null,
+          status: node.status === NodeStatus.Dead ? 'dead' : node.status === NodeStatus.Asleep ? 'asleep' : 'alive',
+        }));
+    } catch {
+      throw new ApiError(503, 'unavailable', 'The zwave-js driver is not ready yet; try again shortly.');
+    }
+    res.status(200).json(nodes);
+  });
+
+  router.patch(
+    '/sensors/:sensorId',
+    requireAuth,
+    requireRole('administrator'),
+    validateBody(updateSensorBodySchema),
+    (req, res) => {
+      const changes = req.body as { name?: string; category?: SensorCategory; zoneId?: string };
+      if (!sensorRepo.findById(req.params.sensorId)) {
+        throw new ApiError(404, 'not_found', `Sensor ${req.params.sensorId} does not exist.`);
+      }
+      if (changes.zoneId !== undefined && !zoneRepo.findById(changes.zoneId)) {
+        throw new ApiError(404, 'not_found', `Zone ${changes.zoneId} does not exist.`);
+      }
+      res.status(200).json(sensorRepo.updateConfig(req.params.sensorId, changes));
+    },
+  );
+
+  router.delete('/sensors/:sensorId', requireAuth, requireRole('administrator'), (req, res) => {
+    if (!sensorRepo.findById(req.params.sensorId)) {
+      throw new ApiError(404, 'not_found', `Sensor ${req.params.sensorId} does not exist.`);
+    }
+    sensorRepo.delete(req.params.sensorId);
+    res.status(204).send();
   });
 
   router.post(
