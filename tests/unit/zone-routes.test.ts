@@ -24,11 +24,14 @@ function setEnv() {
 
 class MockNodeMap {
   private readonly byId = new Map<number, object>();
-  add(id: number): void {
-    this.byId.set(id, {});
+  add(id: number, extra: object = {}): void {
+    this.byId.set(id, { nodeId: id, status: 4, ...extra });
   }
   get(id: number): object | undefined {
     return this.byId.get(id);
+  }
+  values(): IterableIterator<object> {
+    return this.byId.values();
   }
 }
 class MockController {
@@ -224,5 +227,115 @@ describe('zone routes', () => {
       .send({ zwaveNodeId: 10, name: 'Door contact', category: 'intrusion' });
 
     expect(res.status).toBe(403);
+  });
+  describe('configuration panel endpoints', () => {
+    it('creates a zone with a description and rejects a duplicate name', async () => {
+      const { app, userRepo } = await buildHarness();
+      const agent = await loginAs(app, userRepo, 'administrator', 'admin1');
+
+      const created = await agent.post('/api/v1/zones').send({ name: 'Garage', description: 'Side entry' });
+      const dup = await agent.post('/api/v1/zones').send({ name: 'garage' });
+
+      expect(created.status).toBe(201);
+      expect(created.body.description).toBe('Side entry');
+      expect(dup.status).toBe(409);
+    });
+
+    it('PATCHes a zone, 404s an unknown one, 400s an empty body, 409s a name clash', async () => {
+      const { app, userRepo } = await buildHarness();
+      const agent = await loginAs(app, userRepo, 'administrator', 'admin1');
+      const a = (await agent.post('/api/v1/zones').send({ name: 'A' })).body;
+      await agent.post('/api/v1/zones').send({ name: 'B' });
+
+      const ok = await agent.patch(`/api/v1/zones/${a.id}`).send({ name: 'A2', description: 'x' });
+      const missing = await agent.patch('/api/v1/zones/nope').send({ name: 'Z' });
+      const empty = await agent.patch(`/api/v1/zones/${a.id}`).send({});
+      const clash = await agent.patch(`/api/v1/zones/${a.id}`).send({ name: 'b' });
+
+      expect(ok.status).toBe(200);
+      expect(ok.body).toMatchObject({ name: 'A2', description: 'x' });
+      expect(missing.status).toBe(404);
+      expect(empty.status).toBe(400);
+      expect(clash.status).toBe(409);
+    });
+
+    it('refuses to delete a zone with sensors unless forced', async () => {
+      const { app, userRepo, nodeMap } = await buildHarness();
+      const agent = await loginAs(app, userRepo, 'administrator', 'admin1');
+      nodeMap.add(5);
+      const zone = (await agent.post('/api/v1/zones').send({ name: 'Hall' })).body;
+      await agent.post(`/api/v1/zones/${zone.id}/sensors`).send({ zwaveNodeId: 5, name: 'PIR', category: 'intrusion' });
+
+      const blocked = await agent.delete(`/api/v1/zones/${zone.id}`);
+      const forced = await agent.delete(`/api/v1/zones/${zone.id}?force=true`);
+      const gone = await agent.get('/api/v1/zones');
+
+      expect(blocked.status).toBe(409);
+      expect(blocked.body.error.code).toBe('zone_not_empty');
+      expect(forced.status).toBe(204);
+      expect(gone.body).toEqual([]);
+    });
+
+    it('refuses to delete a zone a guest is restricted to', async () => {
+      const { app, userRepo } = await buildHarness();
+      const agent = await loginAs(app, userRepo, 'administrator', 'admin1');
+      const zone = (await agent.post('/api/v1/zones').send({ name: 'Shed' })).body;
+      await agent.post('/api/v1/users').send({ name: 'G', role: 'guest', code: 'gg11', guestZoneId: zone.id });
+
+      const res = await agent.delete(`/api/v1/zones/${zone.id}?force=true`);
+
+      expect(res.status).toBe(409);
+      expect(res.body.error.code).toBe('zone_in_use');
+    });
+
+    it('lists only unassigned, non-controller nodes as discoverable', async () => {
+      const { app, userRepo, nodeMap } = await buildHarness();
+      const agent = await loginAs(app, userRepo, 'administrator', 'admin1');
+      nodeMap.add(1, { isControllerNode: true });
+      nodeMap.add(2, { name: 'Door', deviceConfig: { manufacturer: 'Aeotec', label: 'Door Sensor' } });
+      nodeMap.add(3, { status: 3 });
+      const zone = (await agent.post('/api/v1/zones').send({ name: 'Z' })).body;
+      await agent.post(`/api/v1/zones/${zone.id}/sensors`).send({ zwaveNodeId: 3, name: 'S', category: 'intrusion' });
+      nodeMap.add(4, { status: 1 });
+
+      const res = await agent.get('/api/v1/sensors/discoverable');
+
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual([
+        { zwaveNodeId: 2, name: 'Door', manufacturer: 'Aeotec', product: 'Door Sensor', suggestedCategory: null, status: 'alive' },
+        { zwaveNodeId: 4, name: null, manufacturer: null, product: null, suggestedCategory: null, status: 'asleep' },
+      ]);
+    });
+
+    it('restricts discovery and sensor edits to administrators', async () => {
+      const { app, userRepo } = await buildHarness();
+      const agent = await loginAs(app, userRepo, 'member', 'member1');
+
+      expect((await agent.get('/api/v1/sensors/discoverable')).status).toBe(403);
+      expect((await agent.patch('/api/v1/sensors/x').send({ name: 'n' })).status).toBe(403);
+      expect((await agent.delete('/api/v1/sensors/x')).status).toBe(403);
+    });
+
+    it('moves, renames and unassigns a sensor', async () => {
+      const { app, userRepo, nodeMap } = await buildHarness();
+      const agent = await loginAs(app, userRepo, 'administrator', 'admin1');
+      nodeMap.add(7);
+      const z1 = (await agent.post('/api/v1/zones').send({ name: 'One' })).body;
+      const z2 = (await agent.post('/api/v1/zones').send({ name: 'Two' })).body;
+      const sensor = (
+        await agent.post(`/api/v1/zones/${z1.id}/sensors`).send({ zwaveNodeId: 7, name: 'S', category: 'intrusion' })
+      ).body;
+
+      const moved = await agent.patch(`/api/v1/sensors/${sensor.id}`).send({ zoneId: z2.id, name: 'S2', category: 'life-safety' });
+      const badZone = await agent.patch(`/api/v1/sensors/${sensor.id}`).send({ zoneId: 'nope' });
+      const removed = await agent.delete(`/api/v1/sensors/${sensor.id}`);
+      const again = await agent.delete(`/api/v1/sensors/${sensor.id}`);
+
+      expect(moved.status).toBe(200);
+      expect(moved.body).toMatchObject({ zoneId: z2.id, name: 'S2', category: 'life-safety' });
+      expect(badZone.status).toBe(404);
+      expect(removed.status).toBe(204);
+      expect(again.status).toBe(404);
+    });
   });
 });

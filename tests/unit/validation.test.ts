@@ -107,7 +107,6 @@ describe('request validation', () => {
       ['/zones/z1/sensors', { zwaveNodeId: 10, category: 'intrusion' }],
       ['/users', {}],
       ['/users', { name: 'A', role: 'owner', code: '1234' }],
-      ['/users', { name: 'A', role: 'member' }],
       ['/users', { name: 'A', role: 'guest', code: '1234', guestExpiresAt: 'not-a-date' }],
       ['/users', { name: 'A', role: 'guest', code: '1234', guestZoneId: 7 }],
       ['/ha-links', {}],

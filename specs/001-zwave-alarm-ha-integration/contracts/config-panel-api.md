@@ -1,6 +1,6 @@
-# Contract (PROPOSED): Configuration Panel API
+# Contract: Configuration Panel API
 
-Status: draft for confirmation by `zwave-alarm-client` and `ha-zwave-alarm`. Extends [rest-api.md](./rest-api.md); same base path (`/api/v1`), auth, error format and validation rules. All endpoints below are **administrator only**.
+Status: implemented (moderator-confirmed decisions below). Extends [rest-api.md](./rest-api.md); same base path (`/api/v1`), auth, error format and validation rules. All endpoints below are **administrator only**.
 
 ## Data model changes
 
@@ -13,7 +13,7 @@ Status: draft for confirmation by `zwave-alarm-client` and `ha-zwave-alarm`. Ext
 ## Sensors
 
 ### `GET /api/v1/sensors/discoverable`
-Lists `zwave-js` nodes not yet assigned to a zone: `[{ "zwaveNodeId": number, "name": string|null, "manufacturer": string|null, "product": string|null, "suggestedCategory": "intrusion"|"life-safety"|null, "status": "alive"|"dead"|"asleep" }]`. Suggestion derived from notification/binary-sensor command classes.
+Lists `zwave-js` nodes not yet assigned to a zone: `[{ "zwaveNodeId": number, "name": string|null, "manufacturer": string|null, "product": string|null, "suggestedCategory": "intrusion"|"life-safety"|null, "status": "alive"|"dead"|"asleep" }]`. `suggestedCategory` is reserved and currently always `null`; the admin chooses the category. Controller nodes and nodes already assigned are excluded. `503` while the driver is not ready.
 
 ### `PATCH /api/v1/sensors/{sensorId}`
 Body: any non-empty subset of `name`, `category`, `zoneId`. Moves the sensor between zones. `404` unknown sensor/zone.
@@ -27,15 +27,16 @@ Unassigns the sensor (does not remove the zwave-js node). `204`.
 Body: any non-empty subset of `name`, `description`. Returns the zone with sensors.
 
 ### `DELETE /api/v1/zones/{zoneId}`
-`409` (`zone_not_empty`) if it has sensors or is any guest's `guestZoneId`, unless `?force=true`, which unassigns the sensors and rejects if a guest still references it. `204`.
+`409 zone_not_empty` if it has sensors, unless `?force=true`, which unassigns them. `409 zone_in_use` (even with force) while a guest's `guestZoneId` references it. `204`. Past events keep existing; only their zone/sensor link is cleared. Zone names are unique case-insensitively (`409`).
 
 ## People and codes
 
 ### `GET /api/v1/users`  (extended)
+Optional filter `?haPersonId=person.alex`.
 Each user: `{ id, name, role, hasCode, haPersonId, haUserId, guestExpiresAt, guestZoneId, lockedUntil, createdAt }`. Never any hash.
 
 ### `POST /api/v1/users`  (extended)
-Adds optional `haPersonId`, `haUserId`. `code` stays required (4-12 digits).
+Adds optional `haPersonId`, `haUserId`. `code` is now optional: a user may exist with `hasCode=false` and get a code later via `PUT`. The first-run bootstrap administrator must still send a code. Code format is unchanged (1-128 chars). `haPersonId` is unique (`409`).
 
 ### `PATCH /api/v1/users/{userId}`
 Body: any non-empty subset of `name`, `role`, `haPersonId`, `haUserId`, `guestExpiresAt`, `guestZoneId`. Same guest validation as create. `409` if it would demote the last administrator.
@@ -47,9 +48,4 @@ Body: `{ "code": string }`. Sets or replaces the code; resets failed attempts an
 Clears the code (user can no longer disarm or log in). `204`. `409` for the last administrator.
 
 ## Events
-Config changes record events (`config_changed`, with `details` naming the entity, never code values).
-
-## Open questions
-1. HA side: does the panel need a reverse lookup `GET /users?haPersonId=`? Proposed: filter param on `GET /users`.
-2. Should HA person entities with no code appear as "pending" users? Proposed: HA creates the User on first code assignment; no placeholder rows server-side.
-3. Client: pagination is not planned (household scale).
+No `config_changed` event or websocket broadcast in v1; clients refetch after each mutation.

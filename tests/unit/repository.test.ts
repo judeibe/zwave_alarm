@@ -43,8 +43,8 @@ describe('Repository base', () => {
     const repo = new ZoneRepository(createDatabase(':memory:'));
     repo.insert({ id: 'zone-1', name: 'Garage', created_at: 0 });
 
-    expect(repo.findById('zone-1')).toEqual({ id: 'zone-1', name: 'Garage', created_at: 0 });
-    expect(repo.findAll()).toEqual([{ id: 'zone-1', name: 'Garage', created_at: 0 }]);
+    expect(repo.findById('zone-1')).toEqual({ id: 'zone-1', name: 'Garage', description: null, created_at: 0 });
+    expect(repo.findAll()).toEqual([{ id: 'zone-1', name: 'Garage', description: null, created_at: 0 }]);
     expect(repo.findById('missing')).toBeUndefined();
   });
 

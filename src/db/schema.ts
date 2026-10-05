@@ -114,6 +114,18 @@ const MIGRATIONS: Migration[] = [
       );
     `,
   },
+  {
+    // Configuration panel (contracts/config-panel-api.md): zone description, the HA person/user a
+    // service user is linked to, and users that exist before a code is set (credential_hash = '',
+    // which verifyCredential never matches).
+    id: '004_config_panel',
+    sql: `
+      ALTER TABLE zones ADD COLUMN description TEXT;
+      ALTER TABLE users ADD COLUMN ha_person_id TEXT;
+      ALTER TABLE users ADD COLUMN ha_user_id TEXT;
+      CREATE UNIQUE INDEX idx_users_ha_person_id ON users(ha_person_id) WHERE ha_person_id IS NOT NULL;
+    `,
+  },
 ];
 
 function ensureMigrationsTable(db: Database.Database): void {

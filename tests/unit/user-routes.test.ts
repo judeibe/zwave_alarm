@@ -143,11 +143,10 @@ describe('user routes', () => {
     expect(res.status).toBe(400);
   });
 
-  it('rejects a missing code as 400', async () => {
-    const { app, userRepo } = await buildHarness();
-    const agent = await loginAsAdmin(app, userRepo);
+  it('rejects a first-run bootstrap account with no code as 400', async () => {
+    const { app } = await buildHarness();
 
-    const res = await agent.post('/api/v1/users').send({ name: 'X', role: 'member' });
+    const res = await request(app).post('/api/v1/users').send({ name: 'X', role: 'administrator' });
 
     expect(res.status).toBe(400);
   });
@@ -185,5 +184,104 @@ describe('user routes', () => {
     const res = await memberAgent.delete(`/api/v1/users/${created.id}`);
 
     expect(res.status).toBe(403);
+  });
+  describe('configuration panel endpoints', () => {
+    it('creates a user without a code and reports hasCode=false, never a hash', async () => {
+      const { app, userRepo } = await buildHarness();
+      const agent = await loginAsAdmin(app, userRepo);
+
+      const res = await agent
+        .post('/api/v1/users')
+        .send({ name: 'Alex', role: 'member', haPersonId: 'person.alex', haUserId: 'u1' });
+
+      expect(res.status).toBe(201);
+      expect(res.body).toMatchObject({ hasCode: false, haPersonId: 'person.alex', haUserId: 'u1' });
+      expect(JSON.stringify(res.body)).not.toMatch(/credential|scrypt/);
+    });
+
+    it('filters GET /users by haPersonId and rejects a second user with the same person', async () => {
+      const { app, userRepo } = await buildHarness();
+      const agent = await loginAsAdmin(app, userRepo);
+      await agent.post('/api/v1/users').send({ name: 'Alex', role: 'member', haPersonId: 'person.alex' });
+
+      const hit = await agent.get('/api/v1/users?haPersonId=person.alex');
+      const miss = await agent.get('/api/v1/users?haPersonId=person.zed');
+      const dup = await agent.post('/api/v1/users').send({ name: 'Alex2', role: 'member', haPersonId: 'person.alex' });
+
+      expect(hit.body).toHaveLength(1);
+      expect(miss.body).toEqual([]);
+      expect(dup.status).toBe(409);
+    });
+
+    it('sets a code with PUT, which then logs in, and never returns it', async () => {
+      const { app, userRepo } = await buildHarness();
+      const agent = await loginAsAdmin(app, userRepo);
+      const user = (await agent.post('/api/v1/users').send({ name: 'Mem', role: 'member' })).body;
+
+      const put = await agent.put(`/api/v1/users/${user.id}/code`).send({ code: 'newcode1' });
+      const login = await request(app).post('/api/v1/auth/login').send({ code: 'newcode1' });
+      const list = await agent.get('/api/v1/users');
+
+      expect(put.status).toBe(204);
+      expect(put.text).toBe('');
+      expect(login.status).toBe(200);
+      expect(list.body.find((u: { id: string }) => u.id === user.id).hasCode).toBe(true);
+      expect(JSON.stringify(list.body)).not.toContain('newcode1');
+    });
+
+    it('rejects a code already used by someone else with 409 code_in_use', async () => {
+      const { app, userRepo } = await buildHarness();
+      const agent = await loginAsAdmin(app, userRepo);
+      const user = (await agent.post('/api/v1/users').send({ name: 'Mem', role: 'member' })).body;
+
+      const res = await agent.put(`/api/v1/users/${user.id}/code`).send({ code: 'admin1' });
+
+      expect(res.status).toBe(409);
+      expect(res.body.error.code).toBe('code_in_use');
+    });
+
+    it('clears a code so it no longer logs in, resets lockout, and 404s unknown users', async () => {
+      const { app, userRepo } = await buildHarness();
+      const agent = await loginAsAdmin(app, userRepo);
+      const user = (await agent.post('/api/v1/users').send({ name: 'Mem', role: 'member', code: 'memcode1' })).body;
+
+      const cleared = await agent.delete(`/api/v1/users/${user.id}/code`);
+      const login = await request(app).post('/api/v1/auth/login').send({ code: 'memcode1' });
+      const missing = await agent.put('/api/v1/users/nope/code').send({ code: 'abcd' });
+
+      expect(cleared.status).toBe(204);
+      expect(login.status).toBe(401);
+      expect(missing.status).toBe(404);
+    });
+
+    it('refuses to clear the last administrator code or demote them', async () => {
+      const { app, userRepo } = await buildHarness();
+      const agent = await loginAsAdmin(app, userRepo);
+      const admin = userRepo.list()[0];
+
+      const clear = await agent.delete(`/api/v1/users/${admin.id}/code`);
+      const demote = await agent.patch(`/api/v1/users/${admin.id}`).send({ role: 'member' });
+
+      expect(clear.status).toBe(409);
+      expect(demote.status).toBe(409);
+    });
+
+    it('PATCHes a user, enforcing the guest rule and admin-only access', async () => {
+      const { app, userRepo } = await buildHarness();
+      const agent = await loginAsAdmin(app, userRepo);
+      const user = (await agent.post('/api/v1/users').send({ name: 'Mem', role: 'member', code: 'memcode1' })).body;
+
+      const renamed = await agent.patch(`/api/v1/users/${user.id}`).send({ name: 'Mem2', haPersonId: 'person.mem' });
+      const badGuest = await agent.patch(`/api/v1/users/${user.id}`).send({ role: 'guest' });
+      const empty = await agent.patch(`/api/v1/users/${user.id}`).send({});
+      const memberAgent = request.agent(app);
+      await memberAgent.post('/api/v1/auth/login').send({ code: 'memcode1' }).expect(200);
+      const forbidden = await memberAgent.patch(`/api/v1/users/${user.id}`).send({ name: 'x' });
+
+      expect(renamed.body).toMatchObject({ name: 'Mem2', haPersonId: 'person.mem' });
+      expect(badGuest.status).toBe(400);
+      expect(empty.status).toBe(400);
+      expect(forbidden.status).toBe(403);
+    });
   });
 });

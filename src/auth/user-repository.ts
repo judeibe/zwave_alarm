@@ -10,6 +10,8 @@ export interface User {
   name: string;
   role: UserRole;
   credentialHash: string;
+  haPersonId: string | null;
+  haUserId: string | null;
   guestExpiresAt: number | null;
   guestZoneId: string | null;
   failedAttemptCount: number;
@@ -20,8 +22,10 @@ export interface User {
 export interface CreateUserInput {
   name: string;
   role: UserRole;
-  /** Plaintext disarm code/password; hashed into `credentialHash` before storage. */
-  code: string;
+  /** Plaintext disarm code/password; hashed into `credentialHash` before storage. Omit to create a user with no code yet. */
+  code?: string;
+  haPersonId?: string | null;
+  haUserId?: string | null;
   /** Only meaningful when `role: 'guest'`; ignored (stored as null) for administrator/member. */
   guestExpiresAt?: number | null;
   /** Only meaningful when `role: 'guest'`; ignored (stored as null) for administrator/member. */
@@ -33,6 +37,8 @@ interface UserRow {
   name: string;
   role: UserRole;
   credential_hash: string;
+  ha_person_id: string | null;
+  ha_user_id: string | null;
   guest_expires_at: number | null;
   guest_zone_id: string | null;
   failed_attempt_count: number;
@@ -46,6 +52,8 @@ function toDomain(row: UserRow): User {
     name: row.name,
     role: row.role,
     credentialHash: row.credential_hash,
+    haPersonId: row.ha_person_id,
+    haUserId: row.ha_user_id,
     guestExpiresAt: row.guest_expires_at,
     guestZoneId: row.guest_zone_id,
     failedAttemptCount: row.failed_attempt_count,
@@ -55,6 +63,13 @@ function toDomain(row: UserRow): User {
 }
 
 const SCRYPT_KEYLEN = 64;
+
+/** `credentialHash` of a user with no code set; `verifyCredential` never matches it. */
+const NO_CODE = '';
+
+export function hasCode(user: Pick<User, 'credentialHash'>): boolean {
+  return user.credentialHash !== NO_CODE;
+}
 
 /** Hashes a plaintext disarm code/password as `scrypt:<saltHex>:<hashHex>` for storage in `users.credential_hash`. */
 export function hashCredential(code: string): string {
@@ -94,7 +109,9 @@ export class UserRepository extends Repository {
       id: randomUUID(),
       name: input.name,
       role: input.role,
-      credentialHash: hashCredential(input.code),
+      credentialHash: input.code === undefined ? NO_CODE : hashCredential(input.code),
+      haPersonId: input.haPersonId ?? null,
+      haUserId: input.haUserId ?? null,
       guestExpiresAt: input.role === 'guest' ? (input.guestExpiresAt ?? null) : null,
       guestZoneId: input.role === 'guest' ? (input.guestZoneId ?? null) : null,
       failedAttemptCount: 0,
@@ -103,12 +120,14 @@ export class UserRepository extends Repository {
     };
     this.run(
       `INSERT INTO users
-         (id, name, role, credential_hash, guest_expires_at, guest_zone_id, failed_attempt_count, locked_until, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         (id, name, role, credential_hash, ha_person_id, ha_user_id, guest_expires_at, guest_zone_id, failed_attempt_count, locked_until, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       user.id,
       user.name,
       user.role,
       user.credentialHash,
+      user.haPersonId,
+      user.haUserId,
       user.guestExpiresAt,
       user.guestZoneId,
       user.failedAttemptCount,
@@ -145,6 +164,58 @@ export class UserRepository extends Repository {
 
   delete(id: string): void {
     this.run('DELETE FROM users WHERE id = ?', id);
+  }
+
+  findByHaPersonId(haPersonId: string): User | undefined {
+    const row = this.get<UserRow>('SELECT * FROM users WHERE ha_person_id = ?', haPersonId);
+    return row ? toDomain(row) : undefined;
+  }
+
+  /**
+   * Applies profile changes (not the code). Re-checks the guest rule against the merged result.
+   * Throws `user <id> not found`, or a `guest ...` error when the result would be an invalid guest.
+   */
+  update(
+    id: string,
+    changes: Partial<Pick<User, 'name' | 'role' | 'haPersonId' | 'haUserId' | 'guestExpiresAt' | 'guestZoneId'>>,
+  ): User {
+    const current = toDomain(this.getOrThrow(id));
+    const next: User = { ...current, ...changes };
+    if (next.role !== 'guest') {
+      next.guestExpiresAt = null;
+      next.guestZoneId = null;
+    } else if (next.guestExpiresAt == null && next.guestZoneId == null) {
+      throw new Error('a guest user requires guestExpiresAt and/or guestZoneId');
+    }
+    this.run(
+      `UPDATE users SET name = ?, role = ?, ha_person_id = ?, ha_user_id = ?, guest_expires_at = ?, guest_zone_id = ?
+       WHERE id = ?`,
+      next.name,
+      next.role,
+      next.haPersonId,
+      next.haUserId,
+      next.guestExpiresAt,
+      next.guestZoneId,
+      id,
+    );
+    return next;
+  }
+
+  /** True when `code` already belongs to a user other than `exceptUserId` (login identifies by code). */
+  isCodeInUse(code: string, exceptUserId?: string): boolean {
+    return this.all<UserRow>('SELECT * FROM users').some(
+      (row) => row.id !== exceptUserId && verifyCredential(code, row.credential_hash),
+    );
+  }
+
+  /** Sets (or, with `null`, clears) the user's code and resets failed attempts and any lockout. */
+  setCode(id: string, code: string | null): void {
+    this.getOrThrow(id);
+    this.run(
+      'UPDATE users SET credential_hash = ?, failed_attempt_count = 0, locked_until = NULL WHERE id = ?',
+      code === null ? NO_CODE : hashCredential(code),
+      id,
+    );
   }
 
   private getOrThrow(id: string): UserRow {
