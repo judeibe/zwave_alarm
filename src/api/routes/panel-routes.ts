@@ -2,7 +2,7 @@ import { Router, type Request } from 'express';
 import { ApiError } from '../app.js';
 import { asyncHandler } from '../async-handler.js';
 import { armBodySchema, codeBodySchema, validateBody } from '../validation.js';
-import { requireAuth, requireRole } from '../../auth/authorize.js';
+import { isAuthRequired, requireAuth, requireRole } from '../../auth/authorize.js';
 import { CommandRejectedError, type CommandSource } from '../../alarm/dispatcher.js';
 import { PanelStateError, type ArmMode, type PanelService } from '../../alarm/panel-service.js';
 import { verifyCredential, type UserRepository } from '../../auth/user-repository.js';
@@ -19,7 +19,7 @@ export interface PanelRouteDeps {
 }
 
 function commandSource(req: Request): CommandSource {
-  return req.haLink ? 'home_assistant' : 'native';
+  return req.haLink || !req.session?.userId ? 'home_assistant' : 'native';
 }
 
 function callerUserId(req: Request): string | undefined {
@@ -83,9 +83,11 @@ export function createPanelRouter({ panelService, userRepo, lockoutService, even
     asyncHandler(async (req, res) => {
       const { code } = req.body as { code: string };
       const userId = callerUserId(req);
-      const user = userId === undefined ? undefined : userRepo.findById(userId);
+      // With auth off there is no caller identity, so the code itself identifies the user. A wrong
+      // code is a plain 401: there is no account to attribute a failed attempt to.
+      const user = userId === undefined ? (isAuthRequired() ? undefined : userRepo.findByCode(code)) : userRepo.findById(userId);
       if (user === undefined) {
-        throw new ApiError(401, 'unauthorized', 'A valid session is required to disarm.');
+        throw new ApiError(401, 'unauthorized', isAuthRequired() ? 'A valid session is required to disarm.' : 'Invalid code.');
       }
 
       if (lockoutService.isLocked(user)) {

@@ -3,6 +3,8 @@ import { defineConfig } from 'vitest/config';
 export default defineConfig({
   test: {
     include: ['tests/**/*.test.ts'],
+    // Auth is off by default in production; the existing suites cover the enforced path.
+    env: { API_AUTH_REQUIRED: 'true' },
     // The app logs structured JSON on every request/transition; only show it for failing tests.
     silent: 'passed-only',
     // Many tests create a user and log in, which means real scrypt hashing (deliberately expensive).

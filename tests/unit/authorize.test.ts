@@ -18,8 +18,9 @@ function setEnv() {
  * dynamically imports after env vars are in place, mirroring
  * tests/unit/session.test.ts's precedent.
  */
-async function buildTestApp() {
-  const { requireAuth, requireRole } = await import('../../src/auth/authorize.js');
+async function buildTestApp(authRequired = true) {
+  const { requireAuth, requireRole, configureAuthRequired } = await import('../../src/auth/authorize.js');
+  configureAuthRequired(authRequired);
   const { sessionMiddleware } = await import('../../src/auth/session.js');
   const { toErrorResponse } = await import('../../src/api/app.js');
 
@@ -135,6 +136,21 @@ describe('requireAuth / requireRole', () => {
     const app = await buildTestApp();
 
     const res = await request(app).get('/admin-only');
+
+    expect(res.status).toBe(401);
+  });
+
+  it('lets an unauthenticated request through, as administrator, when auth is not required', async () => {
+    const app = await buildTestApp(false);
+
+    expect((await request(app).get('/any-auth')).status).toBe(200);
+    expect((await request(app).get('/admin-only')).status).toBe(200);
+  });
+
+  it('still rejects a malformed bearer token when auth is not required', async () => {
+    const app = await buildTestApp(false);
+
+    const res = await request(app).get('/any-auth').set('Authorization', 'Bearer nope');
 
     expect(res.status).toBe(401);
   });

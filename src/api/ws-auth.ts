@@ -1,6 +1,7 @@
 import { ServerResponse, type IncomingMessage } from 'node:http';
 import type { Request, RequestHandler, Response } from 'express';
 import type { VerifyClientCallbackAsync } from 'ws';
+import { isAuthRequired } from '../auth/authorize.js';
 import { hashToken, type HaLinkLookup } from '../auth/token.js';
 import { createLogger } from '../config/logger.js';
 
@@ -46,6 +47,11 @@ function loadSession(
 export function createWsVerifyClient({ haLinkLookup, sessionMiddleware }: WsAuthDeps): VerifyClientCallbackAsync {
   return (info, callback) => {
     const req = info.req;
+
+    if (!isAuthRequired()) {
+      callback(true);
+      return;
+    }
 
     const authorization = req.headers.authorization;
     if (authorization !== undefined) {
