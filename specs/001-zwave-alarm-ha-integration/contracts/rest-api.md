@@ -1,6 +1,6 @@
 # Contract: REST API
 
-Base path: `/api/v1`. All endpoints require authentication (session cookie for the native dashboard, or `Authorization: Bearer <token>` for a Home Assistant custom-component connection) — FR-009. Every action is additionally checked against the caller's role (FR-010a).
+Base path: `/api/v1`. By default (`API_AUTH_REQUIRED` unset or `false`) no authentication is needed: a request with no credentials is accepted and treated as administrator-privileged, so Home Assistant connects with host and port only, and `POST /panel/disarm` identifies the user by the submitted `code` alone. With `API_AUTH_REQUIRED=true`, all endpoints require authentication (session cookie for the native dashboard, or `Authorization: Bearer <token>` for a Home Assistant custom-component connection) — FR-009. Either way, a malformed or unknown bearer token is rejected with `401`, and `POST /ha-links` returns `409` while auth is off. Every action is additionally checked against the caller's role (FR-010a).
 
 ## Auth
 

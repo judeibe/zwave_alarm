@@ -16,6 +16,9 @@ export interface AppConfig {
   /** Z-Wave network keys (hex, 16 bytes each) from the environment. Omitted keys are left to zwave-js. */
   securityKeys: Partial<Record<SecurityKeyName, string>>;
   securityKeysLongRange: Partial<Record<LongRangeKeyName, string>>;
+  /** When false (default), REST and stream requests need no session or bearer token, so Home Assistant
+   *  connects with host and port only. Set API_AUTH_REQUIRED=true to enforce sessions/tokens again. */
+  apiAuthRequired: boolean;
   /** Whether arming from a keypad needs a valid user code too. Disarming always does. */
   keypadRequireCodeToArm: boolean;
 }
@@ -170,6 +173,7 @@ function loadConfig(): AppConfig {
     entryDelaySeconds: parseDelaySeconds('ENTRY_DELAY_SECONDS'),
     securityKeys: parseKeys(SECURITY_KEY_ENV),
     securityKeysLongRange: parseKeys(LONG_RANGE_KEY_ENV),
+    apiAuthRequired: process.env.API_AUTH_REQUIRED?.toLowerCase() === 'true',
     keypadRequireCodeToArm: parseBoolean('KEYPAD_REQUIRE_CODE_TO_ARM'),
   };
 }

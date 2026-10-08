@@ -12,6 +12,8 @@ import type { EventRepository } from '../events/event-repository.js';
 import type { HaLinkRepository } from '../db/repositories/ha-link-repository.js';
 import { configureHaLinkAuth } from '../auth/token.js';
 import { requestLogger } from './request-logger.js';
+import { configureAuthRequired } from '../auth/authorize.js';
+import { config } from '../config/index.js';
 import { createAuthRouter } from './routes/auth-routes.js';
 import { createPanelRouter } from './routes/panel-routes.js';
 import { createZoneRouter } from './routes/zone-routes.js';
@@ -129,6 +131,8 @@ export function createApp(deps?: AppDeps): Express {
     // replacing Phase 01's always-reject stub, so both this mount's
     // requireAuth calls and ha-link-routes.ts's own resolve real tokens.
     configureHaLinkAuth(deps.haLinkRepo);
+
+    configureAuthRequired(config.apiAuthRequired);
 
     app.use(sessionMiddleware);
     const routeDeps = {

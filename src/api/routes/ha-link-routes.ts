@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { ApiError } from '../app.js';
 import { createHaLinkBodySchema, validateBody } from '../validation.js';
 import { requireAuth, requireRole } from '../../auth/authorize.js';
 import type { HaLinkRepository, HomeAssistantLink } from '../../db/repositories/ha-link-repository.js';
@@ -41,7 +42,10 @@ export function createHaLinkRouter({ haLinkRepo }: HaLinkRouteDeps): Router {
     // requireRole('administrator') only accepts a session-authenticated
     // caller or an HA-token caller resolved as administrator (authorize.ts's
     // resolveRole) — both populate one of these, so `userId` is always defined here.
-    const userId = (req.session?.userId ?? req.haLink?.userId) as string;
+    const userId = req.session?.userId ?? req.haLink?.userId;
+    if (userId === undefined) {
+      throw new ApiError(409, 'conflict', 'Home Assistant needs no token while API_AUTH_REQUIRED is off.');
+    }
 
     const { link, token } = haLinkRepo.create(label, userId);
     res.status(201).json({ ...toPublicHaLink(link), token });

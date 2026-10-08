@@ -118,6 +118,7 @@ describe('config loader', () => {
     setEnv();
     delete process.env.SIREN_NODE_ID;
     delete process.env.ZWAVE_SERVER_HOST;
+    delete process.env.API_AUTH_REQUIRED;
     const { config } = await import('../../src/config/index.js');
     expect(config).toEqual({
       serialPort: '/dev/ttyACM0',
@@ -131,6 +132,7 @@ describe('config loader', () => {
       entryDelaySeconds: 30,
       securityKeys: {},
       securityKeysLongRange: {},
+      apiAuthRequired: false,
       keypadRequireCodeToArm: false,
     });
   });

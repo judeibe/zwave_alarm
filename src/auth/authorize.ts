@@ -14,11 +14,25 @@ import type { UserRole } from './user-repository.js';
  * link — today that lookup always misses, so this branch is unreachable in
  * practice, matching Phase 02's "zero dependency on Home Assistant" scope.
  */
+let authRequired = false;
+
+/** Turns session/bearer enforcement on or off (config.apiAuthRequired). Off by default: callers are then treated as administrators. */
+export function configureAuthRequired(required: boolean): void {
+  authRequired = required;
+}
+
+export function isAuthRequired(): boolean {
+  return authRequired;
+}
+
 function resolveRole(req: Request): UserRole | undefined {
   if (req.session?.role !== undefined) {
     return req.session.role;
   }
-  return req.haLink ? 'administrator' : undefined;
+  if (req.haLink || !authRequired) {
+    return 'administrator';
+  }
+  return undefined;
 }
 
 /**
@@ -31,6 +45,10 @@ function resolveRole(req: Request): UserRole | undefined {
  */
 export const requireAuth: RequestHandler = (req: Request, res: Response, next: NextFunction): void => {
   if (req.session?.userId !== undefined) {
+    next();
+    return;
+  }
+  if (!authRequired && req.header('authorization') === undefined) {
     next();
     return;
   }
