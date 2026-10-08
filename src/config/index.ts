@@ -19,6 +19,8 @@ export interface AppConfig {
   /** When false (default), REST and stream requests need no session or bearer token, so Home Assistant
    *  connects with host and port only. Set API_AUTH_REQUIRED=true to enforce sessions/tokens again. */
   apiAuthRequired: boolean;
+  /** Whether arming from a keypad needs a valid user code too. Disarming always does. */
+  keypadRequireCodeToArm: boolean;
 }
 
 export type SecurityKeyName = 'S2_Unauthenticated' | 'S2_Authenticated' | 'S2_AccessControl' | 'S0_Legacy';
@@ -79,6 +81,20 @@ function parseDelaySeconds(name: string): number {
     throw new ConfigError(`${name} must be a whole number of seconds between 0 and ${MAX_DELAY_SECONDS}, got "${raw}"`);
   }
   return seconds;
+}
+
+function parseBoolean(name: string): boolean {
+  const raw = process.env[name]?.trim().toLowerCase();
+  if (raw === undefined || raw === '') {
+    return false;
+  }
+  if (raw === 'true' || raw === '1') {
+    return true;
+  }
+  if (raw === 'false' || raw === '0') {
+    return false;
+  }
+  throw new ConfigError(`${name} must be "true" or "false", got "${process.env[name]}"`);
 }
 
 function parseSirenNodeId(value: string): number {
@@ -158,6 +174,7 @@ function loadConfig(): AppConfig {
     securityKeys: parseKeys(SECURITY_KEY_ENV),
     securityKeysLongRange: parseKeys(LONG_RANGE_KEY_ENV),
     apiAuthRequired: process.env.API_AUTH_REQUIRED?.toLowerCase() === 'true',
+    keypadRequireCodeToArm: parseBoolean('KEYPAD_REQUIRE_CODE_TO_ARM'),
   };
 }
 

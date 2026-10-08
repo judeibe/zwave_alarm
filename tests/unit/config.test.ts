@@ -133,6 +133,7 @@ describe('config loader', () => {
       securityKeys: {},
       securityKeysLongRange: {},
       apiAuthRequired: false,
+      keypadRequireCodeToArm: false,
     });
   });
 

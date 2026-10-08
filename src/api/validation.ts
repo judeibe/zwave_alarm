@@ -156,3 +156,9 @@ export function validateQuery(schema: z.ZodType): RequestHandler {
 export function parsedQuery<T>(res: Response): T {
   return res.locals.query as T;
 }
+
+/** `POST /api/v1/keypads/{nodeId}/chime` body. `sound` is checked against the keypad's own list by the service. */
+export const chimeBodySchema = z.object({
+  sound: z.string().min(1).max(MAX_NAME_LENGTH),
+  volume: z.number().int().min(0).max(99).optional(),
+});
