@@ -1,6 +1,7 @@
 import request from 'supertest';
 import type { Express } from 'express';
 import type { Driver } from 'zwave-js';
+import type { DriverState } from '../../src/zwave/driver.js';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createDatabase } from '../../src/db/schema.js';
 import { AlarmPanelRepository } from '../../src/alarm/panel-repository.js';
@@ -35,6 +36,13 @@ class MockDriver {
   controller = new MockController();
 }
 
+const driverState: DriverState = {
+  status: 'failed',
+  lastError: 'No such file or directory, cannot open /dev/zwave',
+  attempts: 3,
+  nextRetryAt: 1_700_000_000_000,
+};
+
 async function buildHarness(): Promise<{
   app: Express;
   userRepo: UserRepository;
@@ -62,7 +70,7 @@ async function buildHarness(): Promise<{
   const { createApp } = await import('../../src/api/app.js');
   const { HaLinkRepository } = await import('../../src/db/repositories/ha-link-repository.js');
   const haLinkRepo = new HaLinkRepository(db);
-  const app = createApp({ panelService, userRepo, zoneRepo, sensorRepo, lockoutService, eventRepo, haLinkRepo, driver });
+  const app = createApp({ panelService, userRepo, zoneRepo, sensorRepo, lockoutService, eventRepo, haLinkRepo, driver, driverState: () => driverState });
 
   // Test-only bypass that establishes a session directly, skipping the real
   // login route's own guest-expiry check -- used to reach panel/disarm's
@@ -115,6 +123,22 @@ describe('panel routes', () => {
 
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({ mode: 'disarmed', pendingDelayEndsAt: null, triggeredBy: null });
+  });
+
+  it('reports the Z-Wave driver state on GET /panel so clients can tell a down driver from a down service', async () => {
+    const { app, userRepo } = await buildHarness();
+    userRepo.create({ name: 'Mem', role: 'member', code: 'member1' });
+    const agent = await loginAs(app, 'member1');
+
+    const res = await agent.get('/api/v1/panel');
+
+    expect(res.status).toBe(200);
+    expect(res.body.driver).toEqual({
+      status: 'failed',
+      lastError: 'No such file or directory, cannot open /dev/zwave',
+      attempts: 3,
+      nextRetryAt: 1_700_000_000_000,
+    });
   });
 
   it('rejects GET /panel for a guest as 403', async () => {

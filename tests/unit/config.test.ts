@@ -119,6 +119,8 @@ describe('config loader', () => {
     delete process.env.SIREN_NODE_ID;
     delete process.env.ZWAVE_SERVER_HOST;
     delete process.env.API_AUTH_REQUIRED;
+    delete process.env.ZWAVE_SOFT_RESET;
+    delete process.env.ZWAVEJS_DISABLE_SOFT_RESET;
     const { config } = await import('../../src/config/index.js');
     expect(config).toEqual({
       serialPort: '/dev/ttyACM0',
@@ -134,7 +136,34 @@ describe('config loader', () => {
       securityKeysLongRange: {},
       apiAuthRequired: false,
       keypadRequireCodeToArm: false,
+      zwaveSoftReset: true,
     });
+  });
+
+  it('reads ZWAVE_SOFT_RESET, falling back to ZWAVEJS_DISABLE_SOFT_RESET, and rejects other values', async () => {
+    delete process.env.ZWAVEJS_DISABLE_SOFT_RESET;
+    setEnv();
+    process.env.ZWAVE_SOFT_RESET = 'FALSE';
+    expect((await import('../../src/config/index.js')).config.zwaveSoftReset).toBe(false);
+
+    vi.resetModules();
+    setEnv();
+    process.env.ZWAVE_SOFT_RESET = '1';
+    expect((await import('../../src/config/index.js')).config.zwaveSoftReset).toBe(true);
+
+    vi.resetModules();
+    setEnv();
+    delete process.env.ZWAVE_SOFT_RESET;
+    process.env.ZWAVEJS_DISABLE_SOFT_RESET = '1';
+    expect((await import('../../src/config/index.js')).config.zwaveSoftReset).toBe(false);
+
+    vi.resetModules();
+    setEnv();
+    process.env.ZWAVE_SOFT_RESET = 'maybe';
+    await expect(import('../../src/config/index.js')).rejects.toThrow(/ZWAVE_SOFT_RESET must be "true" or "false"/);
+
+    delete process.env.ZWAVE_SOFT_RESET;
+    delete process.env.ZWAVEJS_DISABLE_SOFT_RESET;
   });
 
   it('uses ZWAVE_SERVER_HOST when set', async () => {

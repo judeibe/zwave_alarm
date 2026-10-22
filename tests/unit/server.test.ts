@@ -140,6 +140,7 @@ describe('zwave-js-server bootstrap', () => {
     const { startZwaveJsServer } = await import('../../src/zwave/server.js');
     const { getDriver } = await import('../../src/zwave/driver.js');
     (getDriver() as unknown as MockDriver).ready = true;
+    markReadyLater(getDriver());
 
     await startZwaveJsServer();
 

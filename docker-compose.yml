@@ -4,9 +4,18 @@ services:
     image: zwave-alarm-ha-integration
     container_name: zwave-alarm
     restart: unless-stopped
+    healthcheck:
+      # Liveness only: /healthz stays 200 while the Z-Wave driver is down. The driver's own state is
+      # `driver` on GET /api/v1/panel.
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:' + (process.env.HTTP_PORT || 3000) + '/healthz').then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
     # Pass the Z-Wave USB controller through to the container. This process must be
     # the sole owner of the serial port (FR-005) - point SERIAL_PORT at the same
-    # in-container path below.
+    # in-container path below. Replace `your-controller` with the entry listed by
+    # `ls /dev/serial/by-id/` on the host; until you do, the stick is not available to the service.
     devices:
       - "/dev/serial/by-id/your-controller:/dev/zwave"
     ports:
@@ -19,6 +28,8 @@ services:
       - .env
     environment:
       SERIAL_PORT: /dev/zwave
+      # Uncomment if the driver fails with "Serial API did not respond after soft-reset (ZW0100)".
+      # ZWAVE_SOFT_RESET: "false"
       DB_PATH: /app/data/alarm.db
     volumes:
       - zwave-alarm-data:/app/data

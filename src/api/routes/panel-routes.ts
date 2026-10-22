@@ -9,6 +9,7 @@ import { verifyCredential, type UserRepository } from '../../auth/user-repositor
 import type { LockoutService } from '../../auth/lockout-service.js';
 import type { EventRepository } from '../../events/event-repository.js';
 import type { ZoneRepository } from '../../db/repositories/zone-repository.js';
+import type { DriverState } from '../../zwave/driver.js';
 
 export interface PanelRouteDeps {
   panelService: PanelService;
@@ -16,6 +17,8 @@ export interface PanelRouteDeps {
   lockoutService: LockoutService;
   eventRepo: EventRepository;
   zoneRepo: ZoneRepository;
+  /** Supplies the `driver` field of `GET /panel`; omitted in tests that don't model the Z-Wave driver. */
+  driverState?: () => DriverState;
 }
 
 function commandSource(req: Request): CommandSource {
@@ -43,11 +46,20 @@ function callerUserId(req: Request): string | undefined {
  * the code being tested. See auth-routes.ts's login handler for why that
  * doesn't extend to login itself.
  */
-export function createPanelRouter({ panelService, userRepo, lockoutService, eventRepo, zoneRepo }: PanelRouteDeps): Router {
+export function createPanelRouter({
+  panelService,
+  userRepo,
+  lockoutService,
+  eventRepo,
+  zoneRepo,
+  driverState,
+}: PanelRouteDeps): Router {
   const router = Router();
 
+  // The Z-Wave driver's state rides along so a client can tell "service up, driver down" from "service down".
   router.get('/panel', requireAuth, requireRole('administrator', 'member'), (_req, res) => {
-    res.status(200).json(panelService.getState());
+    const panel = panelService.getState();
+    res.status(200).json(driverState ? { ...panel, driver: driverState() } : panel);
   });
 
   router.post(

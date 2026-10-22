@@ -23,6 +23,14 @@ write_files:
           image: ghcr.io/judeibe/zwave_alarm:main
           container_name: zwave-alarm
           restart: unless-stopped
+          healthcheck:
+            # Liveness only: /healthz stays 200 while the Z-Wave driver is down. The driver's own state is
+            # `driver` on GET /api/v1/panel.
+            test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:' + (process.env.HTTP_PORT || 3000) + '/healthz').then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]
+            interval: 30s
+            timeout: 5s
+            start_period: 30s
+            retries: 3
           devices:
             - "/dev/serial/by-id/__ZWAVE_BY_ID__:/dev/zwave"
           ports: ["3000:3000", "3001:3001"]
@@ -49,6 +57,10 @@ runcmd:
     if [ -n "$dev" ]; then
       sed -i "s#__ZWAVE_BY_ID__#$dev#" /opt/zwave-alarm/docker-compose.yml
       cd /opt/zwave-alarm && docker compose up -d
+    else
+      # Without this the placeholder stays in docker-compose.yml and nothing starts, with no sign why.
+      msg="zwave-alarm is NOT running: no Z-Wave stick under /dev/serial/by-id/. Attach it to the VM, reboot if cdc_acm is missing, then replace __ZWAVE_BY_ID__ in /opt/zwave-alarm/docker-compose.yml with its by-id name and run: cd /opt/zwave-alarm && docker compose up -d"
+      echo "$msg" | tee -a /etc/motd /var/log/zwave-alarm-setup.log
     fi
 power_state:
   mode: reboot

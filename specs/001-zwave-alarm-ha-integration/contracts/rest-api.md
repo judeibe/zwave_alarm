@@ -18,7 +18,13 @@ Ends the current session.
 
 ### `GET /api/v1/panel`
 
-Returns current `AlarmPanel` state: `mode`, `pendingDelayEndsAt`, `triggeredBy`, `armedMode` (the armed mode the panel is in or heading to; `null` when disarmed) and `disarmedZoneIds` (zones a zone-restricted guest has disarmed while the panel stays armed — see `POST /api/v1/panel/disarm`; empty otherwise).
+Returns current `AlarmPanel` state: `mode`, `pendingDelayEndsAt`, `triggeredBy`, `armedMode` (the armed mode the panel is in or heading to; `null` when disarmed) and `disarmedZoneIds` (zones a zone-restricted guest has disarmed while the panel stays armed — see `POST /api/v1/panel/disarm`; empty otherwise) and `driver`, the state of the service's Z-Wave driver:
+
+```json
+{ "driver": { "status": "starting" | "ready" | "failed", "lastError": string | null, "attempts": number, "nextRetryAt": number | null } }
+```
+
+`status` is `starting` while the serial port is opened and the controller interviewed, `ready` once zwave-js reports "driver ready", and `failed` while a start attempt has failed and the next one (a backoff of 2 s doubling to 60 s) is scheduled at `nextRetryAt` (epoch ms; `null` otherwise). `lastError` is the latest failure or driver error text and is cleared when the driver becomes ready. `attempts` counts start attempts so far. `/healthz` is liveness only and stays `200` whatever the driver's status. While `status` is not `ready`, `GET /api/v1/sensors/discoverable` and `POST /api/v1/zones/{zoneId}/sensors` return `503` with error code `unavailable`.
 
 ### `POST /api/v1/panel/arm`
 

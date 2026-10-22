@@ -5,9 +5,13 @@ import { createShutdown } from '../../src/shutdown.js';
 const mockDriverStart = vi.fn<() => Promise<void>>();
 const mockDriverDestroy = vi.fn(() => Promise.resolve());
 class MockDriver extends EventEmitter {
-  // Ready as soon as it has started, so the server's wait-for-"driver ready" resolves immediately.
+  // Ready as soon as it has started: emits "driver ready" once start() resolves, which is what
+  // startDriver() waits for.
   ready = true;
-  start = mockDriverStart;
+  start = () =>
+    mockDriverStart().then(() => {
+      queueMicrotask(() => this.emit('driver ready'));
+    });
   destroy = mockDriverDestroy;
 }
 vi.mock('zwave-js', () => ({ Driver: vi.fn(function Driver() { return new MockDriver(); }) }));
@@ -194,12 +198,17 @@ describe('stopping the zwave-js driver and server', () => {
     mockDriverStart.mockRejectedValue(new Error('no such device'));
     const { startZwaveJsServer, stopZwaveJsServer } = await import('../../src/zwave/server.js');
     const { stopDriver } = await import('../../src/zwave/driver.js');
-    await startZwaveJsServer().catch(() => {});
+    // The failed start is retried in the background, so it only settles once shutdown cancels the retry.
+    const started = startZwaveJsServer();
+    await vi.waitFor(() => expect(mockDriverStart).toHaveBeenCalledTimes(1));
 
     await stopZwaveJsServer();
     await stopDriver();
+    await expect(started).rejects.toThrow('stopped before it started');
 
-    expect(mockDriverDestroy).not.toHaveBeenCalled();
+    expect(mockServerStart).not.toHaveBeenCalled();
+    // Only the failed instance's replacement was destroyed by the retry path, never a started driver.
+    expect(mockDriverDestroy).toHaveBeenCalledTimes(1);
     expect(mockServerDestroy).not.toHaveBeenCalled();
   });
 

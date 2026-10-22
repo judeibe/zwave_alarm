@@ -11,7 +11,7 @@ import { createWsVerifyClient } from './api/ws-auth.js';
 import { sessionMiddleware } from './auth/session.js';
 import { attachWsBroadcaster, buildLiveSnapshot } from './api/ws-broadcaster.js';
 import { startZwaveJsServer, stopZwaveJsServer } from './zwave/server.js';
-import { getDriver, stopDriver } from './zwave/driver.js';
+import { getDriver, getDriverState, stopDriver } from './zwave/driver.js';
 import { createShutdown } from './shutdown.js';
 import { AlarmPanelRepository } from './alarm/panel-repository.js';
 import { PanelService } from './alarm/panel-service.js';
@@ -80,7 +80,7 @@ new KeypadController(keypadService, panelService, userRepo, lockoutService, even
   requireCodeToArm: config.keypadRequireCodeToArm,
 }).start();
 
-const app = createApp({ panelService, userRepo, zoneRepo, sensorRepo, lockoutService, eventRepo, haLinkRepo, driver, keypadService });
+const app = createApp({ panelService, userRepo, zoneRepo, sensorRepo, lockoutService, eventRepo, haLinkRepo, driver, keypadService, driverState: getDriverState });
 const httpServer = createServer(app);
 
 // Shares the REST API's HTTP server/port, per contracts/websocket-events.md's
