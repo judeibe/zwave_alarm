@@ -25,6 +25,7 @@ vi.mock('zwave-js', () => ({
 }));
 
 const mockServerStart = vi.fn(() => Promise.resolve());
+const mockServerDestroy = vi.fn(() => Promise.resolve());
 
 class MockZwavejsServer {
   constructor(
@@ -32,6 +33,7 @@ class MockZwavejsServer {
     public options: Record<string, unknown>,
   ) {}
   start = mockServerStart;
+  destroy = mockServerDestroy;
 }
 
 const ZwavejsServerCtor = vi.fn(function ZwavejsServer(driver: unknown, options: Record<string, unknown>) {
@@ -61,6 +63,7 @@ describe('zwave-js-server bootstrap', () => {
     mockDriverStart.mockClear();
     ZwavejsServerCtor.mockClear();
     mockServerStart.mockClear();
+    mockServerDestroy.mockClear();
     setEnv();
   });
 
@@ -145,5 +148,24 @@ describe('zwave-js-server bootstrap', () => {
     await startZwaveJsServer();
 
     expect(mockServerStart).toHaveBeenCalledTimes(1);
+  });
+
+  it('replaces the server with one bound to the restarted driver on a later "driver ready"', async () => {
+    const { startZwaveJsServer, stopZwaveJsServer } = await import('../../src/zwave/server.js');
+    const { getDriver } = await import('../../src/zwave/driver.js');
+    markReadyLater(getDriver());
+    await startZwaveJsServer();
+    expect(ZwavejsServerCtor).toHaveBeenCalledTimes(1);
+
+    getDriver().emit('driver ready');
+    await vi.waitFor(() => expect(mockServerStart).toHaveBeenCalledTimes(2));
+
+    expect(mockServerDestroy).toHaveBeenCalledTimes(1);
+    expect(ZwavejsServerCtor).toHaveBeenCalledTimes(2);
+
+    await stopZwaveJsServer();
+    getDriver().emit('driver ready');
+    await Promise.resolve();
+    expect(mockServerStart).toHaveBeenCalledTimes(2);
   });
 });

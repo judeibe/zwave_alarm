@@ -25,8 +25,12 @@ export class KeypadGateway {
     private readonly keypads: KeypadService,
   ) {}
 
-  /** Attaches to every known node plus any included later. Call once the driver is ready. */
+  /**
+   * Attaches to every known node plus any included later. Call on every "driver ready": a driver
+   * restarted after a failure has a new controller and new node objects.
+   */
   start(): void {
+    this.attachedNodeIds.clear();
     this.driver.controller.nodes.forEach((node) => this.attachNode(node));
     this.driver.controller.on('node added', (node) => this.attachNode(node));
     logger.info('keypad gateway started', { keypads: this.keypads.list().length });

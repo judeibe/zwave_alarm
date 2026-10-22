@@ -64,9 +64,11 @@ export class SensorMapper extends EventEmitter {
   /**
    * Attaches listeners to every currently-known controller node plus any
    * included later. Safe to call before the network scan finishes — nodes
-   * discovered afterwards arrive via the controller's "node added" event.
+   * discovered afterwards arrive via the controller's "node added" event. Call it on every
+   * "driver ready": a driver restarted after a failure has a new controller and new node objects.
    */
   start(): void {
+    this.attachedNodeIds.clear();
     this.driver.controller.nodes.forEach((node) => this.attachNode(node));
     this.driver.controller.on('node added', (node) => this.attachNode(node));
     logger.info('sensor mapper started', { knownNodes: this.attachedNodeIds.size });

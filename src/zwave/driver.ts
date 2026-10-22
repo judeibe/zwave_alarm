@@ -54,8 +54,8 @@ function errorMessage(err: unknown): string {
 }
 
 // zwave-js has no "driver failed" event; failures to start/run surface via the "error" event (and
-// via `start()`'s rejection). Here it is only recorded; `startAttempt` is what turns an error that
-// arrives before "driver ready" into a failed start.
+// via `start()`'s rejection). Here it is only recorded; `startAttempt` (before "driver ready") and
+// `untilFailure` (after) are what turn it into a restart.
 function onDriverError(err: Error): void {
   state = { ...state, lastError: err.message };
   logger.error('zwave-js driver failed', { error: err.message });
@@ -183,20 +183,60 @@ function startAttempt(instance: Driver): Promise<void> {
   });
 }
 
-async function startWithRetry(): Promise<void> {
+/**
+ * Settles when `instance` emits "error" after being ready (rejects), or when `stopDriver()` ends
+ * supervision (resolves; a deliberate `destroy()` is not a failure and must not trigger a retry).
+ */
+function untilFailure(instance: Driver): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const cleanup = () => {
+      instance.off('error', onError);
+    };
+    const onError = (err: unknown) => {
+      cleanup();
+      if (stopping) {
+        resolve();
+      } else {
+        reject(err);
+      }
+    };
+    wakeRetry = () => {
+      cleanup();
+      resolve();
+    };
+    instance.on('error', onError);
+  });
+}
+
+/**
+ * Supervises the driver for the life of the process: starts it, calls `onReady` once it is ready,
+ * then watches for an "error" (e.g. the stick drops off USB). Any failure, before or after ready,
+ * replaces the instance and starts again with backoff. Backoff restarts from 2 s after a run that
+ * reached ready. Only rejects if `stopDriver()` ends it before the driver was ever ready.
+ */
+async function startWithRetry(onReady: () => void): Promise<void> {
   getDriver();
+  let everReady = false;
+  let failures = 0;
   for (let attempt = 1; !stopping; attempt++) {
     state = { status: 'starting', lastError: state.lastError, attempts: attempt, nextRetryAt: null };
     logger.info('starting zwave-js driver', { serialPort: config.serialPort, attempt });
+    let wasReady = false;
     try {
       await startAttempt(current!);
       started = true;
-      return;
+      wasReady = true;
+      everReady = true;
+      failures = 0;
+      onReady();
+      await untilFailure(current!);
     } catch (err) {
-      const delay = retryDelayMs(attempt);
+      started = false;
+      failures++;
+      const delay = retryDelayMs(failures);
       const message = errorMessage(err);
       state = { status: 'failed', lastError: message, attempts: attempt, nextRetryAt: Date.now() + delay };
-      logger.error('zwave-js driver failed to start', {
+      logger.error(wasReady ? 'zwave-js driver failed after it was ready' : 'zwave-js driver failed to start', {
         serialPort: config.serialPort,
         attempt,
         error: message,
@@ -206,18 +246,24 @@ async function startWithRetry(): Promise<void> {
       await sleepUntilRetry(delay);
     }
   }
-  throw new Error('zwave-js driver was stopped before it started');
+  if (!everReady) {
+    throw new Error('zwave-js driver was stopped before it started');
+  }
 }
 
 /**
- * Starts the driver, opening the serial port and interviewing the controller, and keeps retrying
- * with backoff if that fails: the controller isn't attached, the port is busy, or the controller
- * stops answering during startup (e.g. after a soft-reset, ZW0100). Safe to call multiple times —
- * later calls return the same promise. Resolves once the driver is "ready". Failures are retried,
- * not rejected; it only rejects if `stopDriver()` ends the retrying first.
+ * Starts the driver, opening the serial port and interviewing the controller, and keeps it running:
+ * it retries with backoff if that fails (the controller isn't attached, the port is busy, or it
+ * stops answering during startup, e.g. after a soft-reset, ZW0100), and restarts it on a fresh
+ * instance if it fails later. Safe to call multiple times — later calls return the same promise.
+ * Resolves the first time the driver is "ready". Failures are retried, not rejected; it only
+ * rejects if `stopDriver()` ends the retrying before then. Code that attaches to the controller or
+ * its nodes must re-attach on every "driver ready", since a restart creates new objects.
  */
 export function startDriver(): Promise<void> {
-  startPromise ??= startWithRetry();
+  startPromise ??= new Promise<void>((resolve, reject) => {
+    startWithRetry(resolve).catch(reject);
+  });
   return startPromise;
 }
 

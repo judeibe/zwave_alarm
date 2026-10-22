@@ -57,12 +57,17 @@ const driver = getDriver();
 // rather than running right away. Siren only touches controller.nodes
 // lazily inside its panel_changed handler, so it's safe to construct now.
 const sensorMapper = new SensorMapper(driver, sensorRepo, panelService, eventRepo);
-driver.once('driver ready', () => {
+// `on`, not `once`: a driver restarted after a failure has new controller/node objects, so the
+// mapper and keypad gateway re-attach on every "driver ready" (the driver facade carries this
+// listener over to each replacement instance).
+let keypadAdapters: Promise<void> | undefined;
+driver.on('driver ready', () => {
   sensorMapper.start();
   // A siren state that had to wait for the driver (e.g. alarm_triggered restored after a restart).
   siren.sync();
-  // Keypads: load the adapters first so a node's identity can be matched as soon as it's attached.
-  discoverKeypadAdapters(KEYPAD_ADAPTERS_DIR, keypadRegistry)
+  // Keypads: load the adapters first (once) so a node's identity can be matched as soon as it's attached.
+  keypadAdapters ??= discoverKeypadAdapters(KEYPAD_ADAPTERS_DIR, keypadRegistry);
+  keypadAdapters
     .then(() => keypadGateway.start())
     .catch((err: unknown) => {
       logger.error('keypad support failed to start', { error: err instanceof Error ? err.message : String(err) });
