@@ -10,10 +10,11 @@ import type { SensorRepository } from '../db/repositories/sensor-repository.js';
 import type { PanelService } from '../alarm/panel-service.js';
 import type { EventRepository } from '../events/event-repository.js';
 import type { HaLinkRepository } from '../db/repositories/ha-link-repository.js';
+import type { DriverState } from '../zwave/driver.js';
 import { configureHaLinkAuth } from '../auth/token.js';
-import { requestLogger } from './request-logger.js';
 import { configureAuthRequired } from '../auth/authorize.js';
 import { config } from '../config/index.js';
+import { requestLogger } from './request-logger.js';
 import { createAuthRouter } from './routes/auth-routes.js';
 import { createPanelRouter } from './routes/panel-routes.js';
 import { createZoneRouter } from './routes/zone-routes.js';
@@ -95,6 +96,8 @@ export interface AppDeps {
   keypadService?: KeypadService;
   /** Only `controller.nodes` is read (zone-routes.ts validates an assigned zwaveNodeId against it). */
   driver: Pick<Driver, 'controller'>;
+  /** Reports the driver's start-up state on `GET /api/v1/panel`; src/index.ts passes `getDriverState`. */
+  driverState?: () => DriverState;
 }
 
 /**
@@ -131,7 +134,6 @@ export function createApp(deps?: AppDeps): Express {
     // replacing Phase 01's always-reject stub, so both this mount's
     // requireAuth calls and ha-link-routes.ts's own resolve real tokens.
     configureHaLinkAuth(deps.haLinkRepo);
-
     configureAuthRequired(config.apiAuthRequired);
 
     app.use(sessionMiddleware);
@@ -144,6 +146,7 @@ export function createApp(deps?: AppDeps): Express {
       eventRepo: deps.eventRepo,
       haLinkRepo: deps.haLinkRepo,
       driver: deps.driver,
+      driverState: deps.driverState,
     };
     app.use('/api/v1', createAuthRouter(routeDeps));
     app.use('/api/v1', createPanelRouter(routeDeps));
