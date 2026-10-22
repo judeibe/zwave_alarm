@@ -9,8 +9,10 @@ On connect, the server sends one `snapshot` event with the full current state, t
 ### `snapshot`
 
 ```json
-{ "type": "snapshot", "panel": { "mode": "armed_away", "pendingDelayEndsAt": null, "disarmedZoneIds": [] }, "zones": [ /* Zone + SensorDevice[] */ ] }
+{ "type": "snapshot", "panel": { "mode": "armed_away", "pendingDelayEndsAt": null, "disarmedZoneIds": [] }, "zones": [ /* Zone + SensorDevice[] */ ], "driver": { "status": "ready", "lastError": null, "attempts": 1, "nextRetryAt": null } }
 ```
+
+`driver` is the state of the service's Z-Wave driver, the same object as `driver` on `GET /api/v1/panel`.
 
 ### `panel.changed`
 
@@ -29,6 +31,14 @@ On connect, the server sends one `snapshot` event with the full current state, t
 ```json
 { "type": "sensor.fault", "sensorId": "...", "connectivityStatus": "offline", "batteryLevel": 8 }
 ```
+
+### `driver.state`
+
+```json
+{ "type": "driver.state", "status": "failed", "lastError": "Failed to initialize the driver: The Serial API did not respond after soft-reset (ZW0100)", "attempts": 1, "nextRetryAt": 1792295627000 }
+```
+
+Sent on every change of the Z-Wave driver's state, with the fields of `driver` on `GET /api/v1/panel` (`contracts/rest-api.md`): `status` is `starting`, `ready` or `failed`; `lastError` is the latest failure text, cleared on `ready`; `attempts` counts start attempts; `nextRetryAt` is the epoch ms of the next retry while `failed`, otherwise `null`. A driver that fails after it was ready goes `failed`, then `starting`, then `ready` again. A client that reconnects gets the current value in `snapshot` instead.
 
 ### `event.recorded`
 

@@ -82,6 +82,26 @@ function attachAndStart(driver: MockDriver, mapper: SensorMapper, nodeIds: numbe
 }
 
 describe('SensorMapper', () => {
+  it('re-attaches to the new node objects when started again after the driver was restarted', async () => {
+    const { driver, mapper, sensorRepo, panelService, intrusionSensor } = buildMapper();
+    attachAndStart(driver, mapper, [intrusionSensor.zwaveNodeId]);
+
+    // A restarted driver has a new controller with new node objects for the same node ids.
+    driver.controller = new MockController();
+    const restarted = attachAndStart(driver, mapper, [intrusionSensor.zwaveNodeId]);
+
+    await panelService.arm('armed_away', { source: 'native' });
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    restarted.get(10)!.emit('notification', {}, CommandClasses.Notification, {
+      type: 6,
+      label: 'Access Control',
+      event: 22,
+      eventLabel: 'Door/window open',
+    });
+
+    expect(sensorRepo.findByNodeId(10)?.currentState).toBe('breached');
+  });
+
   describe('Notification CC (intrusion)', () => {
     it('marks the sensor breached and reports the breach to the panel service on the normal->breached edge', async () => {
       const { driver, mapper, sensorRepo, panelService, intrusionSensor } = buildMapper();

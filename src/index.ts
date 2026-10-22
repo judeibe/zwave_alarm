@@ -11,7 +11,7 @@ import { createWsVerifyClient } from './api/ws-auth.js';
 import { sessionMiddleware } from './auth/session.js';
 import { attachWsBroadcaster, buildLiveSnapshot } from './api/ws-broadcaster.js';
 import { startZwaveJsServer, stopZwaveJsServer } from './zwave/server.js';
-import { getDriver, getDriverState, stopDriver } from './zwave/driver.js';
+import { getDriver, getDriverState, onDriverStateChange, stopDriver } from './zwave/driver.js';
 import { createShutdown } from './shutdown.js';
 import { AlarmPanelRepository } from './alarm/panel-repository.js';
 import { PanelService } from './alarm/panel-service.js';
@@ -57,12 +57,17 @@ const driver = getDriver();
 // rather than running right away. Siren only touches controller.nodes
 // lazily inside its panel_changed handler, so it's safe to construct now.
 const sensorMapper = new SensorMapper(driver, sensorRepo, panelService, eventRepo);
-driver.once('driver ready', () => {
+// `on`, not `once`: a driver restarted after a failure has new controller/node objects, so the
+// mapper and keypad gateway re-attach on every "driver ready" (the driver facade carries this
+// listener over to each replacement instance).
+let keypadAdapters: Promise<void> | undefined;
+driver.on('driver ready', () => {
   sensorMapper.start();
   // A siren state that had to wait for the driver (e.g. alarm_triggered restored after a restart).
   siren.sync();
-  // Keypads: load the adapters first so a node's identity can be matched as soon as it's attached.
-  discoverKeypadAdapters(KEYPAD_ADAPTERS_DIR, keypadRegistry)
+  // Keypads: load the adapters first (once) so a node's identity can be matched as soon as it's attached.
+  keypadAdapters ??= discoverKeypadAdapters(KEYPAD_ADAPTERS_DIR, keypadRegistry);
+  keypadAdapters
     .then(() => keypadGateway.start())
     .catch((err: unknown) => {
       logger.error('keypad support failed to start', { error: err instanceof Error ? err.message : String(err) });
@@ -86,15 +91,16 @@ const httpServer = createServer(app);
 // Shares the REST API's HTTP server/port, per contracts/websocket-events.md's
 // `wss://<host>/api/v1/stream` endpoint.
 // Authenticated at connect time, same as the REST API (session cookie or HA bearer token).
+const driverStatus = { get: getDriverState, subscribe: onDriverStateChange };
 const wss = createWebSocketServer(
   {
     server: httpServer,
     path: '/api/v1/stream',
     verifyClient: createWsVerifyClient({ haLinkLookup: haLinkRepo, sessionMiddleware }),
   },
-  () => buildLiveSnapshot({ panelService, zoneRepo, keypadService }),
+  () => buildLiveSnapshot({ panelService, zoneRepo, keypadService, driverStatus }),
 );
-attachWsBroadcaster(wss, { panelService, sensorMapper, eventRepo, zoneRepo, keypadService });
+attachWsBroadcaster(wss, { panelService, sensorMapper, eventRepo, zoneRepo, keypadService, driverStatus });
 
 // After the siren and broadcaster are listening: re-schedules an exit/entry delay that was in
 // flight when the service last stopped (SC-006), which may itself commit a transition.

@@ -167,6 +167,23 @@ describe('zwave driver singleton', () => {
     });
   });
 
+  describe('state change notifications', () => {
+    it('notifies subscribers of every state change until they unsubscribe', async () => {
+      vi.spyOn(console, 'log').mockImplementation(() => {});
+      vi.spyOn(console, 'error').mockImplementation(() => {});
+      const { getDriver, onDriverStateChange } = await import('../../src/zwave/driver.js');
+      const seen: string[] = [];
+      const unsubscribe = onDriverStateChange((state) => seen.push(`${state.status}:${state.lastError ?? '-'}`));
+
+      getDriver().emit('error', new Error('boom'));
+      getDriver().emit('driver ready');
+      unsubscribe();
+      getDriver().emit('error', new Error('ignored'));
+
+      expect(seen).toEqual(['starting:boom', 'ready:-']);
+    });
+  });
+
   describe('start retry', () => {
     beforeEach(() => {
       vi.useFakeTimers();
@@ -233,6 +250,73 @@ describe('zwave driver singleton', () => {
       created[1].emit('driver ready');
       await started;
       expect(getDriverState()).toMatchObject({ status: 'ready', lastError: null, attempts: 2 });
+    });
+
+    it('restarts on a fresh Driver when the driver errors after it was ready, with backoff from 2 s', async () => {
+      const { startDriver, getDriverState, getDriver } = await import('../../src/zwave/driver.js');
+      const onReady = vi.fn();
+      getDriver().on('driver ready', onReady);
+
+      const started = startDriver();
+      await vi.advanceTimersByTimeAsync(0);
+      created[0].emit('driver ready');
+      await started;
+      expect(getDriverState()).toMatchObject({ status: 'ready', attempts: 1 });
+      expect(onReady).toHaveBeenCalledTimes(1);
+
+      created[0].emit('error', new Error('serial port closed'));
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(getDriverState()).toMatchObject({
+        status: 'failed',
+        lastError: 'serial port closed',
+        attempts: 1,
+        nextRetryAt: Date.now() + 2_000,
+      });
+      expect(DriverCtor).toHaveBeenCalledTimes(2);
+      expect(created[0].destroy).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(mockStart).toHaveBeenCalledTimes(2);
+      expect(getDriverState()).toMatchObject({ status: 'starting', attempts: 2, nextRetryAt: null });
+
+      created[1].emit('driver ready');
+      // The persistent "driver ready" listener moved to the replacement, so consumers can re-attach.
+      expect(onReady).toHaveBeenCalledTimes(2);
+      expect(getDriverState()).toMatchObject({ status: 'ready', lastError: null, attempts: 2 });
+    });
+
+    it('restarts the backoff after a run that reached ready, but keeps doubling while starts keep failing', async () => {
+      const { startDriver, getDriverState } = await import('../../src/zwave/driver.js');
+      void startDriver();
+      await vi.advanceTimersByTimeAsync(0);
+      created[0].emit('driver ready');
+      await vi.advanceTimersByTimeAsync(0);
+
+      created[0].emit('error', new Error('lost'));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(getDriverState().nextRetryAt).toBe(Date.now() + 2_000);
+
+      await vi.advanceTimersByTimeAsync(2_000);
+      created[1].emit('error', new Error('still down'));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(getDriverState()).toMatchObject({ status: 'failed', attempts: 2, nextRetryAt: Date.now() + 4_000 });
+    });
+
+    it('does not retry when the driver is stopped deliberately', async () => {
+      const { startDriver, stopDriver } = await import('../../src/zwave/driver.js');
+      const started = startDriver();
+      await vi.advanceTimersByTimeAsync(0);
+      created[0].emit('driver ready');
+      await started;
+
+      await stopDriver();
+      created[0].emit('error', new Error('closed by destroy'));
+      await vi.advanceTimersByTimeAsync(120_000);
+
+      expect(created[0].destroy).toHaveBeenCalledTimes(1);
+      expect(DriverCtor).toHaveBeenCalledTimes(1);
+      expect(mockStart).toHaveBeenCalledTimes(1);
     });
 
     it('does not copy its own start listeners onto the replacement driver', async () => {

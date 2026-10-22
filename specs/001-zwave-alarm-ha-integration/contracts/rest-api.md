@@ -2,6 +2,18 @@
 
 Base path: `/api/v1`. By default (`API_AUTH_REQUIRED` unset or `false`) no authentication is needed: a request with no credentials is accepted and treated as administrator-privileged, so Home Assistant connects with host and port only, and `POST /panel/disarm` identifies the user by the submitted `code` alone. With `API_AUTH_REQUIRED=true`, all endpoints require authentication (session cookie for the native dashboard, or `Authorization: Bearer <token>` for a Home Assistant custom-component connection) — FR-009. Either way, a malformed or unknown bearer token is rejected with `401`, and `POST /ha-links` returns `409` while auth is off. Every action is additionally checked against the caller's role (FR-010a).
 
+## Service health
+
+Both are unauthenticated and sit outside `/api/v1`.
+
+### `GET /healthz`
+
+Liveness: `200 {"status":"ok"}` whenever the process answers, whatever the Z-Wave driver's status. The Docker health check uses it, so a missing stick does not put the container in a restart loop.
+
+### `GET /readyz`
+
+Readiness: `200 {"status":"ready","driver":{...}}` once the Z-Wave driver is `ready`, otherwise `503 {"status":"unavailable","driver":{...}}` (while it is `starting`, or `failed` and waiting to retry, including after it failed while running). `driver` is the same object as on `GET /api/v1/panel`.
+
 ## Auth
 
 ### `POST /api/v1/auth/login`
@@ -24,7 +36,7 @@ Returns current `AlarmPanel` state: `mode`, `pendingDelayEndsAt`, `triggeredBy`,
 { "driver": { "status": "starting" | "ready" | "failed", "lastError": string | null, "attempts": number, "nextRetryAt": number | null } }
 ```
 
-`status` is `starting` while the serial port is opened and the controller interviewed, `ready` once zwave-js reports "driver ready", and `failed` while a start attempt has failed and the next one (a backoff of 2 s doubling to 60 s) is scheduled at `nextRetryAt` (epoch ms; `null` otherwise). `lastError` is the latest failure or driver error text and is cleared when the driver becomes ready. `attempts` counts start attempts so far. `/healthz` is liveness only and stays `200` whatever the driver's status. While `status` is not `ready`, `GET /api/v1/sensors/discoverable` and `POST /api/v1/zones/{zoneId}/sensors` return `503` with error code `unavailable`.
+`status` is `starting` while the serial port is opened and the controller interviewed, `ready` once zwave-js reports "driver ready", and `failed` while a start attempt has failed and the next one (a backoff of 2 s doubling to 60 s) is scheduled at `nextRetryAt` (epoch ms; `null` otherwise). `lastError` is the latest failure or driver error text and is cleared when the driver becomes ready. `attempts` counts start attempts so far. `/healthz` is liveness only and stays `200` whatever the driver's status; `/readyz` is `503` until it is `ready`. While `status` is not `ready`, `GET /api/v1/sensors/discoverable` and `POST /api/v1/zones/{zoneId}/sensors` return `503` with error code `unavailable`.
 
 ### `POST /api/v1/panel/arm`
 

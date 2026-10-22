@@ -5,6 +5,7 @@ import type { SensorMapper } from '../zwave/sensor-mapper.js';
 import type { SensorDevice } from '../db/repositories/sensor-repository.js';
 import type { ZoneRepository } from '../db/repositories/zone-repository.js';
 import { EventRepository, type SecurityEvent } from '../events/event-repository.js';
+import type { DriverState } from '../zwave/driver.js';
 import type { KeypadPublicEvent, KeypadService, KeypadSummary } from '../keypads/keypad-service.js';
 
 export interface WsBroadcasterDeps {
@@ -14,6 +15,14 @@ export interface WsBroadcasterDeps {
   zoneRepo: ZoneRepository;
   /** Optional: keypad events and the snapshot's `keypads` are only sent when supplied. */
   keypadService?: KeypadService;
+  /** Optional: `driver.state` events are only sent when supplied (src/index.ts passes the real driver's). */
+  driverStatus?: DriverStatusSource;
+}
+
+/** The Z-Wave driver's state and a way to follow its changes, as exported by src/zwave/driver.ts. */
+export interface DriverStatusSource {
+  get: () => DriverState;
+  subscribe: (listener: (state: DriverState) => void) => unknown;
 }
 
 /**
@@ -21,13 +30,14 @@ export interface WsBroadcasterDeps {
  * live state, for use as `src/api/ws.ts`'s `createWebSocketServer`
  * `buildSnapshot` argument.
  */
-export function buildLiveSnapshot(deps: Pick<WsBroadcasterDeps, 'panelService' | 'zoneRepo' | 'keypadService'>): Record<string, unknown> {
+export function buildLiveSnapshot(deps: Pick<WsBroadcasterDeps, 'panelService' | 'zoneRepo' | 'keypadService' | 'driverStatus'>): Record<string, unknown> {
   const panel = deps.panelService.getState();
   return {
     type: 'snapshot',
     panel: { mode: panel.mode, pendingDelayEndsAt: panel.pendingDelayEndsAt, disarmedZoneIds: panel.disarmedZoneIds },
     zones: deps.zoneRepo.list(),
     ...(deps.keypadService && { keypads: deps.keypadService.list() }),
+    ...(deps.driverStatus && { driver: deps.driverStatus.get() }),
   };
 }
 
@@ -56,7 +66,7 @@ function broadcast(wss: WebSocketServer, message: Record<string, unknown>): void
 }
 
 /**
- * Wires `panel.changed`, `sensor.changed`, `sensor.fault`, and
+ * Wires `panel.changed`, `sensor.changed`, `sensor.fault`, `driver.state` and
  * `event.recorded` (contracts/websocket-events.md) from the live
  * PanelService/SensorMapper/EventRepository onto every connected client of
  * `wss`. This is a pure fan-out: it never sends a per-client differentiated
@@ -91,6 +101,11 @@ export function attachWsBroadcaster(wss: WebSocketServer, deps: WsBroadcasterDep
       connectivityStatus: sensor.connectivityStatus,
       batteryLevel: sensor.batteryLevel,
     });
+  });
+
+  // Every change, so a client sees "failed" with its retry time and then "ready" without polling.
+  deps.driverStatus?.subscribe((driver) => {
+    broadcast(wss, { type: 'driver.state', ...driver });
   });
 
   deps.keypadService?.on('keypad_changed', (keypad: KeypadSummary) => {

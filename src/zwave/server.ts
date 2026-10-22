@@ -57,9 +57,36 @@ export function startZwaveJsServer(): Promise<void> {
           host: config.zwaveServerHost,
           port: config.zwaveServerPort,
         });
+        // Registered on the driver facade, so it follows the driver to each replacement instance and
+        // fires on every "driver ready" after this first one.
+        getDriver().on('driver ready', () => void restartForNewDriver());
       });
   }
   return startPromise;
+}
+
+/**
+ * A driver restarted after a failure is a new instance, but the running server is bound to the old
+ * one and would serve a dead network. Replace it so Home Assistant's Z-Wave JS integration, which
+ * reconnects on its own, sees the live driver.
+ */
+async function restartForNewDriver(): Promise<void> {
+  if (!started) {
+    return; // Shutting down.
+  }
+  logger.info('zwave-js driver restarted, restarting zwave-js-server');
+  try {
+    await server?.destroy();
+  } catch (err) {
+    logger.warn('stopping the previous zwave-js-server failed', { error: err instanceof Error ? err.message : String(err) });
+  }
+  server = undefined;
+  try {
+    await getZwaveJsServer().start();
+    logger.info('zwave-js-server listening', { host: config.zwaveServerHost, port: config.zwaveServerPort });
+  } catch (err) {
+    logger.error('zwave-js-server failed to restart', { error: err instanceof Error ? err.message : String(err) });
+  }
 }
 
 /** Stops serving the zwave-js-server protocol, for graceful shutdown. A no-op if it never started. */
