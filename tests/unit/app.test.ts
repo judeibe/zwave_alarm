@@ -47,6 +47,54 @@ describe('createApp', () => {
     expect(res.body).toEqual({ status: 'ok' });
   });
 
+  describe('/readyz', () => {
+    const state = (status: 'starting' | 'ready' | 'failed') => ({
+      status,
+      lastError: status === 'failed' ? 'ZW0100' : null,
+      attempts: 1,
+      nextRetryAt: null,
+    });
+
+    async function appWithDriver(getState: () => ReturnType<typeof state>) {
+      const { createApp } = await loadApp();
+      // Only driverState is read by the routes under test; the rest of AppDeps is not exercised.
+      return createApp({ driverState: getState } as unknown as Parameters<typeof createApp>[0]);
+    }
+
+    it.each(['starting', 'failed'] as const)('returns 503 with the driver state while it is %s', async (status) => {
+      const app = await appWithDriver(() => state(status));
+
+      const res = await request(app).get('/readyz');
+
+      expect(res.status).toBe(503);
+      expect(res.body).toEqual({ status: 'unavailable', driver: state(status) });
+    });
+
+    it('returns 200 once the driver is ready, and follows it back down when it restarts', async () => {
+      let current = state('ready');
+      const app = await appWithDriver(() => current);
+
+      const ready = await request(app).get('/readyz');
+      expect(ready.status).toBe(200);
+      expect(ready.body).toEqual({ status: 'ready', driver: state('ready') });
+
+      current = state('failed');
+      expect((await request(app).get('/readyz')).status).toBe(503);
+    });
+
+    it('keeps /healthz at 200 whatever the driver state', async () => {
+      const app = await appWithDriver(() => state('failed'));
+
+      expect((await request(app).get('/healthz')).status).toBe(200);
+    });
+
+    it('is not mounted without a driver state', async () => {
+      const { createApp } = await loadApp();
+
+      expect((await request(createApp()).get('/readyz')).status).toBe(404);
+    });
+  });
+
   it('parses JSON request bodies', async () => {
     const { createApp } = await loadApp();
     const app = createApp();

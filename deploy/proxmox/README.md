@@ -14,7 +14,7 @@ The service stays up when it cannot open the stick: `/healthz` returns 200, but 
 3. `cd /opt/zwave-alarm && docker compose up -d --force-recreate`. A container only gets its devices when it is created, so a restart is not enough after changing them.
 4. `docker exec zwave-alarm ls -l /dev/zwave` must exist, and `docker logs zwave-alarm --tail 100` should show `zwave-js driver ready`. An `EBUSY` error means another program (Z-Wave JS UI, a Home Assistant add-on) holds the stick; only one process may own it. `The Serial API did not respond after soft-reset (ZW0100)` means the stick went silent after the soft-reset, which happens with some sticks under USB passthrough: add `ZWAVE_SOFT_RESET=false` to `/opt/zwave-alarm/.env`, replug the stick if it stays silent, and recreate the container as above. Check `dmesg | grep -i -E "ttyACM|cdc_acm|usb"` on the VM; a disconnect/re-enumeration at the time of the failure confirms it.
 
-Compose runs a health check against `/healthz` (`docker ps` shows `healthy`). It reports that the service answers, not that the Z-Wave driver works; read `driver.status` from `GET /api/v1/panel` for that.
+Compose runs a health check against `/healthz` (`docker ps` shows `healthy`). It reports that the service answers, not that the Z-Wave driver works; read `driver.status` from `GET /api/v1/panel` for that, or use `GET /readyz`, which returns `503` until the driver is ready.
 
 ## Z-Wave security keys
 

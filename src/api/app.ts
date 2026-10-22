@@ -101,7 +101,7 @@ export interface AppDeps {
 }
 
 /**
- * Builds the Express app: JSON body parsing, a `/healthz` route, and the
+ * Builds the Express app: JSON body parsing, `/healthz` (and `/readyz` once a driver state is supplied) routes, and the
  * catch-all error-handling middleware — always present. When `deps` is
  * supplied, also mounts the session middleware (src/auth/session.ts) and the
  * full `/api/v1` REST surface (T027) wired to the given
@@ -121,6 +121,18 @@ export function createApp(deps?: AppDeps): Express {
   app.get('/healthz', (_req: Request, res: Response) => {
     res.status(200).json({ status: 'ok' });
   });
+
+  // Readiness, unlike liveness above: 503 until the Z-Wave driver is ready, and again while it is
+  // restarting. For load balancers and monitors; the Docker health check stays on /healthz so a
+  // missing stick doesn't put the container in a restart loop.
+  const driverState = deps?.driverState;
+  if (driverState) {
+    app.get('/readyz', (_req: Request, res: Response) => {
+      const driver = driverState();
+      const ready = driver.status === 'ready';
+      res.status(ready ? 200 : 503).json({ status: ready ? 'ready' : 'unavailable', driver });
+    });
+  }
 
   // The minimal bundled dashboard (T030): index.html/app.js/styles.css,
   // served as plain static files ahead of the /api/v1 mount below so they
