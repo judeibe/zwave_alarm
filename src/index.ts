@@ -11,7 +11,7 @@ import { createWsVerifyClient } from './api/ws-auth.js';
 import { sessionMiddleware } from './auth/session.js';
 import { attachWsBroadcaster, buildLiveSnapshot } from './api/ws-broadcaster.js';
 import { startZwaveJsServer, stopZwaveJsServer } from './zwave/server.js';
-import { getDriver, getDriverState, stopDriver } from './zwave/driver.js';
+import { getDriver, getDriverState, onDriverStateChange, stopDriver } from './zwave/driver.js';
 import { createShutdown } from './shutdown.js';
 import { AlarmPanelRepository } from './alarm/panel-repository.js';
 import { PanelService } from './alarm/panel-service.js';
@@ -91,15 +91,16 @@ const httpServer = createServer(app);
 // Shares the REST API's HTTP server/port, per contracts/websocket-events.md's
 // `wss://<host>/api/v1/stream` endpoint.
 // Authenticated at connect time, same as the REST API (session cookie or HA bearer token).
+const driverStatus = { get: getDriverState, subscribe: onDriverStateChange };
 const wss = createWebSocketServer(
   {
     server: httpServer,
     path: '/api/v1/stream',
     verifyClient: createWsVerifyClient({ haLinkLookup: haLinkRepo, sessionMiddleware }),
   },
-  () => buildLiveSnapshot({ panelService, zoneRepo, keypadService }),
+  () => buildLiveSnapshot({ panelService, zoneRepo, keypadService, driverStatus }),
 );
-attachWsBroadcaster(wss, { panelService, sensorMapper, eventRepo, zoneRepo, keypadService });
+attachWsBroadcaster(wss, { panelService, sensorMapper, eventRepo, zoneRepo, keypadService, driverStatus });
 
 // After the siren and broadcaster are listening: re-schedules an exit/entry delay that was in
 // flight when the service last stopped (SC-006), which may itself commit a transition.

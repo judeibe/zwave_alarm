@@ -1,4 +1,4 @@
-import { once } from 'node:events';
+import { EventEmitter, once } from 'node:events';
 import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it } from 'vitest';
 import { WebSocket, WebSocketServer } from 'ws';
@@ -13,6 +13,7 @@ import { PanelService } from '../../src/alarm/panel-service.js';
 import { SensorMapper } from '../../src/zwave/sensor-mapper.js';
 import { createWebSocketServer } from '../../src/api/ws.js';
 import { attachWsBroadcaster, buildLiveSnapshot } from '../../src/api/ws-broadcaster.js';
+import type { DriverState } from '../../src/zwave/driver.js';
 
 class MockNode {
   constructor(public readonly id: number) {}
@@ -287,5 +288,67 @@ describe('ws-broadcaster', () => {
     expect((await secondNextMessage(1)).type).toBe('event.recorded');
 
     second.close();
+  });
+
+  describe('driver.state', () => {
+    function driverStatusSource(initial: DriverState) {
+      const changes = new EventEmitter();
+      let current = initial;
+      return {
+        source: {
+          get: () => current,
+          subscribe: (listener: (state: DriverState) => void) => changes.on('change', listener),
+        },
+        set(next: DriverState) {
+          current = next;
+          changes.emit('change', next);
+        },
+      };
+    }
+
+    async function connectWithDriver(driverStatus: ReturnType<typeof driverStatusSource>['source']) {
+      const harness = buildHarness();
+      wss = createWebSocketServer({ port: 0 }, () =>
+        buildLiveSnapshot({ panelService: harness.panelService, zoneRepo: harness.zoneRepo, driverStatus }),
+      );
+      attachWsBroadcaster(wss, { ...harness, driverStatus });
+      await once(wss, 'listening');
+      const { port } = wss.address() as AddressInfo;
+      client = new WebSocket(`ws://127.0.0.1:${port}`);
+      const nextMessage = collectMessages(client);
+      await once(client, 'open');
+      return nextMessage;
+    }
+
+    it('includes the current driver state in the snapshot and broadcasts every change', async () => {
+      const driver = driverStatusSource({ status: 'starting', lastError: null, attempts: 1, nextRetryAt: null });
+      const nextMessage = await connectWithDriver(driver.source);
+
+      expect((await nextMessage(0)).driver).toEqual({ status: 'starting', lastError: null, attempts: 1, nextRetryAt: null });
+
+      driver.set({ status: 'failed', lastError: 'ZW0100', attempts: 1, nextRetryAt: 1_792_295_627_000 });
+      driver.set({ status: 'ready', lastError: null, attempts: 2, nextRetryAt: null });
+
+      expect(await nextMessage(1)).toEqual({
+        type: 'driver.state',
+        status: 'failed',
+        lastError: 'ZW0100',
+        attempts: 1,
+        nextRetryAt: 1_792_295_627_000,
+      });
+      expect(await nextMessage(2)).toEqual({
+        type: 'driver.state',
+        status: 'ready',
+        lastError: null,
+        attempts: 2,
+        nextRetryAt: null,
+      });
+    });
+
+    it('sends no driver field or event when no driver source is supplied', async () => {
+      const nextMessage = await connect(buildHarness());
+
+      expect(await nextMessage(0)).not.toHaveProperty('driver');
+    });
   });
 });

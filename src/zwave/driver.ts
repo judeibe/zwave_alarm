@@ -1,4 +1,4 @@
-import type { EventEmitter } from 'node:events';
+import { EventEmitter } from 'node:events';
 import { Driver } from 'zwave-js';
 import { config } from '../config/index.js';
 import { createLogger } from '../config/logger.js';
@@ -40,6 +40,12 @@ let stopping = false;
 let retryTimer: NodeJS.Timeout | undefined;
 let wakeRetry: (() => void) | undefined;
 let state: DriverState = { status: 'starting', lastError: null, attempts: 0, nextRetryAt: null };
+const stateChanges = new EventEmitter();
+
+function setState(next: DriverState): void {
+  state = next;
+  stateChanges.emit('change', { ...state });
+}
 
 function toBytes<K extends string>(keys: Partial<Record<K, string>>): Partial<Record<K, Uint8Array<ArrayBuffer>>> {
   const bytes: Partial<Record<K, Uint8Array<ArrayBuffer>>> = {};
@@ -57,12 +63,12 @@ function errorMessage(err: unknown): string {
 // via `start()`'s rejection). Here it is only recorded; `startAttempt` (before "driver ready") and
 // `untilFailure` (after) are what turn it into a restart.
 function onDriverError(err: Error): void {
-  state = { ...state, lastError: err.message };
+  setState({ ...state, lastError: err.message });
   logger.error('zwave-js driver failed', { error: err.message });
 }
 
 function onDriverReady(): void {
-  state = { status: 'ready', lastError: null, attempts: state.attempts, nextRetryAt: null };
+  setState({ status: 'ready', lastError: null, attempts: state.attempts, nextRetryAt: null });
   logger.info('zwave-js driver ready');
 }
 
@@ -149,6 +155,12 @@ export function getDriverState(): DriverState {
   return { ...state };
 }
 
+/** Calls `listener` with the new state on every change; returns the unsubscribe function. */
+export function onDriverStateChange(listener: (state: DriverState) => void): () => void {
+  stateChanges.on('change', listener);
+  return () => void stateChanges.off('change', listener);
+}
+
 function sleepUntilRetry(delayMs: number): Promise<void> {
   return new Promise((resolve) => {
     wakeRetry = resolve;
@@ -219,7 +231,7 @@ async function startWithRetry(onReady: () => void): Promise<void> {
   let everReady = false;
   let failures = 0;
   for (let attempt = 1; !stopping; attempt++) {
-    state = { status: 'starting', lastError: state.lastError, attempts: attempt, nextRetryAt: null };
+    setState({ status: 'starting', lastError: state.lastError, attempts: attempt, nextRetryAt: null });
     logger.info('starting zwave-js driver', { serialPort: config.serialPort, attempt });
     let wasReady = false;
     try {
@@ -235,7 +247,7 @@ async function startWithRetry(onReady: () => void): Promise<void> {
       failures++;
       const delay = retryDelayMs(failures);
       const message = errorMessage(err);
-      state = { status: 'failed', lastError: message, attempts: attempt, nextRetryAt: Date.now() + delay };
+      setState({ status: 'failed', lastError: message, attempts: attempt, nextRetryAt: Date.now() + delay });
       logger.error(wasReady ? 'zwave-js driver failed after it was ready' : 'zwave-js driver failed to start', {
         serialPort: config.serialPort,
         attempt,

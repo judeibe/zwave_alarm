@@ -167,6 +167,23 @@ describe('zwave driver singleton', () => {
     });
   });
 
+  describe('state change notifications', () => {
+    it('notifies subscribers of every state change until they unsubscribe', async () => {
+      vi.spyOn(console, 'log').mockImplementation(() => {});
+      vi.spyOn(console, 'error').mockImplementation(() => {});
+      const { getDriver, onDriverStateChange } = await import('../../src/zwave/driver.js');
+      const seen: string[] = [];
+      const unsubscribe = onDriverStateChange((state) => seen.push(`${state.status}:${state.lastError ?? '-'}`));
+
+      getDriver().emit('error', new Error('boom'));
+      getDriver().emit('driver ready');
+      unsubscribe();
+      getDriver().emit('error', new Error('ignored'));
+
+      expect(seen).toEqual(['starting:boom', 'ready:-']);
+    });
+  });
+
   describe('start retry', () => {
     beforeEach(() => {
       vi.useFakeTimers();
