@@ -19,6 +19,24 @@ type NotificationArgs = Parameters<ZWaveNotificationCallback>[2];
 
 const DEFAULT_LOW_BATTERY_THRESHOLD_PERCENT = 20;
 
+/**
+ * zwave-js `property` (the notification type's name) of Notification CC values whose non-idle state means a
+ * sensor is tripped. Power Management, System, Siren etc. are deliberately absent — they are not breaches.
+ */
+const BREACH_NOTIFICATION_PROPERTIES = new Set([
+  'Home Security',
+  'Smoke Alarm',
+  'CO Alarm',
+  'CO2 Alarm',
+  'Heat Alarm',
+  'Water Alarm',
+  'Gas Alarm',
+  'Emergency Alarm',
+]);
+const ACCESS_CONTROL_PROPERTY = 'Access Control';
+const DOOR_STATE_PROPERTY_KEYS = new Set(['Door state', 'Door state (simple)']);
+const DOOR_CLOSED_EVENT = 23;
+
 export interface SensorMapperOptions {
   /** Battery percentage at/below which a sensor is reported as a low-battery fault (FR-012). Defaults to 20. */
   lowBatteryThresholdPercent?: number;
@@ -132,6 +150,11 @@ export class SensorMapper extends EventEmitter {
 
     if (args.commandClass === CommandClasses['Binary Sensor']) {
       this.applyBreachState(sensor, Boolean(args.newValue));
+    } else if (args.commandClass === CommandClasses.Notification) {
+      const breached = notificationValueBreached(args);
+      if (breached !== null) {
+        this.applyBreachState(sensor, breached);
+      }
     } else if (args.commandClass === CommandClasses.Battery && args.property === 'level') {
       // zwave-js reports either a 0-100 percentage or the sentinel string "low" when a device can't report an exact level.
       const raw = args.newValue;
@@ -193,4 +216,27 @@ export class SensorMapper extends EventEmitter {
       details,
     });
   }
+}
+
+/**
+ * zwave-js only emits the `notification` event for stateless notification events. State-based ones — motion,
+ * intrusion, glass break, door open/closed, smoke... — are stored as Notification CC values and surface only
+ * as `value updated` (newValue = the event code, 0 = idle). Returns null for values that say nothing about breach.
+ */
+function notificationValueBreached(args: ZWaveNodeValueUpdatedArgs): boolean | null {
+  const { property, propertyKey, newValue } = args;
+  if (typeof newValue !== 'number') {
+    return null; // zwave-js's "unknown state" sentinel
+  }
+  if (property === ACCESS_CONTROL_PROPERTY) {
+    // Only door/window open-close is a breach; lock and keypad states on the same CC are not.
+    if (typeof propertyKey !== 'string' || !DOOR_STATE_PROPERTY_KEYS.has(propertyKey)) {
+      return null;
+    }
+    return newValue !== 0 && newValue !== DOOR_CLOSED_EVENT;
+  }
+  if (typeof property === 'string' && BREACH_NOTIFICATION_PROPERTIES.has(property)) {
+    return newValue !== 0;
+  }
+  return null;
 }

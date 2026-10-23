@@ -222,6 +222,49 @@ describe('SensorMapper', () => {
     });
   });
 
+  describe('Notification CC state values (zwave-js stores these instead of emitting "notification")', () => {
+    const emitValue = (nodes: Map<number, MockNode>, property: string, propertyKey: string, newValue: unknown) =>
+      nodes.get(10)!.emit('value updated', { id: 10 }, {
+        commandClass: CommandClasses.Notification,
+        commandClassName: 'Notification',
+        property,
+        propertyKey,
+        newValue,
+        prevValue: 0,
+      });
+
+    it('marks breached on a Home Security intrusion state and normal on idle (0)', () => {
+      const { driver, mapper, sensorRepo, intrusionSensor } = buildMapper();
+      const nodes = attachAndStart(driver, mapper, [intrusionSensor.zwaveNodeId]);
+
+      emitValue(nodes, 'Home Security', 'Motion sensor status', 8);
+      expect(sensorRepo.findByNodeId(10)?.currentState).toBe('breached');
+
+      emitValue(nodes, 'Home Security', 'Motion sensor status', 0);
+      expect(sensorRepo.findByNodeId(10)?.currentState).toBe('normal');
+    });
+
+    it('treats Access Control door open (22) as breached and closed (23) as normal', () => {
+      const { driver, mapper, sensorRepo, intrusionSensor } = buildMapper();
+      const nodes = attachAndStart(driver, mapper, [intrusionSensor.zwaveNodeId]);
+
+      emitValue(nodes, 'Access Control', 'Door state', 22);
+      expect(sensorRepo.findByNodeId(10)?.currentState).toBe('breached');
+
+      emitValue(nodes, 'Access Control', 'Door state', 23);
+      expect(sensorRepo.findByNodeId(10)?.currentState).toBe('normal');
+    });
+
+    it('ignores Access Control lock states and non-security notification types', () => {
+      const { driver, mapper, sensorRepo, intrusionSensor } = buildMapper();
+      const nodes = attachAndStart(driver, mapper, [intrusionSensor.zwaveNodeId]);
+
+      emitValue(nodes, 'Access Control', 'Lock state', 1);
+      emitValue(nodes, 'Power Management', 'Mains status', 2);
+      expect(sensorRepo.findByNodeId(10)?.currentState).toBe('normal');
+    });
+  });
+
   describe('Battery CC fault detection (FR-012)', () => {
     it('records a device_fault on the ok->low edge but not on repeated low readings', () => {
       const { driver, mapper, sensorRepo, eventRepo, intrusionSensor } = buildMapper({ lowBatteryThresholdPercent: 20 });
