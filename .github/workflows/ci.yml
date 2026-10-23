@@ -29,7 +29,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22 # matches engines.node and the Dockerfile base image
           cache: npm
@@ -75,13 +75,13 @@ jobs:
         with:
           fetch-depth: 0 # the commit history and tags decide the version
           persist-credentials: false # semantic-release authenticates with GITHUB_TOKEN itself
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: lts/*
       # Reads the Conventional Commits since the last tag; if any warrants it, bumps the version files
       # (release.config.mjs), commits, tags vX.Y.Z and creates the GitHub release.
       - id: release
-        uses: cycjimmy/semantic-release-action@v4
+        uses: cycjimmy/semantic-release-action@v8
         with:
           semantic_version: 24
           extra_plugins: |
@@ -116,7 +116,7 @@ jobs:
           [ "v$(node -p "require('./package.json').version")" = "${GITHUB_REF_NAME}" ] \
             || { echo "::error::tag ${GITHUB_REF_NAME} does not match package.json; let semantic-release create tags"; exit 1; }
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
 
       # Only log in when we will push; PRs (incl. forks) just verify the image builds.
       - name: Log in to ghcr.io
@@ -128,7 +128,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ${{ env.IMAGE_NAME }}
           tags: |
@@ -141,7 +141,7 @@ jobs:
             type=raw,value=latest,enable={{is_default_branch}}
 
       - id: build
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           # The Proxmox VM is x86_64; add linux/arm64 (plus QEMU) only if an ARM host appears.
@@ -156,7 +156,7 @@ jobs:
 
       - name: Attest build provenance
         if: github.event_name != 'pull_request'
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@v4
         with:
           subject-name: ${{ env.IMAGE_NAME }}
           subject-digest: ${{ steps.build.outputs.digest }}
