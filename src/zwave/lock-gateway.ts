@@ -29,6 +29,10 @@ export class ZwaveLockGateway implements LockPort {
     this.attachedNodeIds.clear();
     this.driver.controller.nodes.forEach((node) => this.attachNode(node));
     this.driver.controller.on('node added', (node) => this.attachNode(node));
+    this.driver.controller.on('node removed', (node) => {
+      this.attachedNodeIds.delete(node.id);
+      this.locks.remove(node.id);
+    });
     logger.info('lock gateway started', { locks: this.locks.list().length });
   }
 
@@ -148,8 +152,8 @@ export class ZwaveLockGateway implements LockPort {
       return;
     }
 
-    this.locks.add(node.id, identity, { connectivityStatus: node.status === NodeStatus.Dead ? 'offline' : 'online' });
-    logger.info('lock recognised', { nodeId: node.id, model: identity.model });
+    this.locks.add(node.id, identity, { connectivityStatus: node.status === NodeStatus.Dead ? 'offline' : 'online', secure: node.isSecure ?? null });
+    logger.info('lock recognised', { nodeId: node.id, model: identity.model, enrolled: this.locks.isEnrolled(node.id) });
 
     node.on('value updated', (n, args) => {
       if (args.commandClass === CommandClasses.Battery && args.property === 'level') {
@@ -163,7 +167,11 @@ export class ZwaveLockGateway implements LockPort {
     node.on('dead', (n) => this.locks.updateStatus(n.id, { connectivityStatus: 'offline' }));
     node.on('alive', (n) => this.locks.updateStatus(n.id, { connectivityStatus: 'online' }));
 
-    // Load the lock's parameters in the background; clients can also ask for a refresh.
+    // A lock that is only paired is left alone; enrolling it reads its state. For an enrolled one,
+    // load the parameters in the background (clients can also ask for a refresh).
+    if (!this.locks.isEnrolled(node.id)) {
+      return;
+    }
     void this.locks.refresh(node.id).catch((err: unknown) => {
       logger.warn('initial lock refresh failed', { nodeId: node.id, error: err instanceof Error ? err.message : String(err) });
     });

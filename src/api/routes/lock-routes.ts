@@ -6,6 +6,7 @@ import { requireAuth, requireRole } from '../../auth/authorize.js';
 import {
   LockCommunicationError,
   LockNotFoundError,
+  LockNotSecureError,
   LockUnsupportedError,
   SCHEDULE_KINDS,
   type LockService,
@@ -26,6 +27,9 @@ function toApiError(err: unknown): unknown {
   }
   if (err instanceof LockValueError || err instanceof LockUnsupportedError) {
     return new ApiError(400, 'bad_request', err.message);
+  }
+  if (err instanceof LockNotSecureError) {
+    return new ApiError(409, 'lock_not_secure', err.message);
   }
   if (err instanceof LockCommunicationError) {
     return new ApiError(502, 'lock_unavailable', err.message);
@@ -79,6 +83,31 @@ export function createLockRouter({ lockService }: LockRouteDeps): Router {
   router.get('/locks', ...guard, (_req, res) => {
     res.status(200).json({ locks: lockService.list() });
   });
+
+  // Paired but not enrolled locks, so an administrator can pick one to add. Never used to create devices.
+  router.get('/locks/available', ...guard, requireRole('administrator'), (_req, res) => {
+    res.status(200).json({ locks: lockService.listAvailable() });
+  });
+
+  router.put(
+    '/locks/:nodeId/enrollment',
+    ...guard,
+    requireRole('administrator'),
+    lockHandler(async (nodeId, _req, res) => {
+      res.status(200).json(await lockService.enroll(nodeId));
+    }),
+  );
+
+  router.delete(
+    '/locks/:nodeId/enrollment',
+    ...guard,
+    requireRole('administrator'),
+    lockHandler((nodeId, _req, res) => {
+      lockService.unenroll(nodeId);
+      res.status(204).end();
+      return Promise.resolve();
+    }),
+  );
 
   router.get(
     '/locks/:nodeId',

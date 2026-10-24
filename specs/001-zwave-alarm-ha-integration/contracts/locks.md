@@ -1,8 +1,14 @@
 # Contract: Schlage locks
 
-Schlage Z-Wave locks: the **BE469** (touchscreen deadbolt with alarm) and the **BE468** (connected touchscreen deadbolt), including the ZP variants. A lock is recognised by its Z-Wave manufacturer (`0x003B`) and product ids, so there is nothing to configure. Same authentication as the rest of the API (session cookie or Home Assistant bearer token; `administrator`/`member` roles). No endpoint ever returns a stored user code.
+Schlage Z-Wave locks: the **BE469** (touchscreen deadbolt with alarm) and the **BE468** (connected touchscreen deadbolt), including the ZP variants. A lock is recognised by its Z-Wave manufacturer (`0x003B`) and product ids (BE469ZP is `0x0001`/`0x0469`, BE468ZP `0x0001`/`0x0468`), so there is nothing to configure.
 
-Errors use the standard `{ "error": { "code", "message" } }` shape: `400 bad_request` (invalid value, or a BE469-only setting on a BE468), `404 not_found` (unknown lock or schedule kind), `502 lock_unavailable` (the lock did not answer or rejected a write).
+## Enrollment: "added to the alarm system"
+
+A recognised Schlage node is only **paired**. It becomes part of the alarm system when an administrator **enrolls** it (`PUT /locks/{nodeId}/enrollment`); the enrollment is stored, so it survives restarts, and it ends on `DELETE /locks/{nodeId}/enrollment` or when the node leaves the Z-Wave network. A paired but not enrolled lock is invisible: it is absent from `GET /locks`, the websocket `snapshot` and `lock.changed`, every other `/locks/{nodeId}/...` route answers `404 not_found` for it, and nothing is read from or written to it. The only place it appears is `GET /locks/available`, which is for choosing a lock to enroll. **Clients must create Home Assistant devices and entities from `GET /locks` and the `locks` in the `snapshot`/`lock.changed` only, never from `/locks/available`**, and must remove a lock's device on `lock.removed`.
+
+Enrolling a lock known to be included without S0/S2 security is refused with `409 lock_not_secure` (its user codes and schedules could not be managed): exclude it and include it again with S0 or S2. Same authentication as the rest of the API (session cookie or Home Assistant bearer token; `administrator`/`member` roles). No endpoint ever returns a stored user code.
+
+Errors use the standard `{ "error": { "code", "message" } }` shape: `400 bad_request` (invalid value, a BE469-only setting on a BE468, or a schedule kind the lock has no slots for), `404 not_found` (unknown or not enrolled lock, or unknown schedule kind), `409 lock_not_secure` (enrolling a lock without S0/S2), `502 lock_unavailable` (the lock did not answer or rejected a write).
 
 ## `LockSummary`
 
@@ -24,9 +30,26 @@ Errors use the standard `{ "error": { "code", "message" } }` shape: `400 bad_req
     "userSlotBitField": [1, 0, 0, 0], "occupiedUserSlots": [1]
   },
   "scheduleSlots": { "weekDay": 7, "yearDay": 7, "dailyRepeating": 7 },
-  "userSlotCount": 30
+  "userSlotCount": 30,
+  "capabilities": {
+    "secure": true,
+    "userCodes": true,
+    "schedules": { "weekDay": true, "yearDay": true, "dailyRepeating": false },
+    "alarmSettings": true
+  }
 }
 ```
+
+### Capabilities
+
+`capabilities` tells a client what to offer; hide or disable anything that is `false`, and treat `null` as "not known yet" (re-read after `refresh` or the next `lock.changed`).
+
+| Flag | Meaning |
+| --- | --- |
+| `secure` | The lock was included with S0/S2. `null` if unknown. User codes and schedules need it. |
+| `userCodes` | User Code CC, `userSlotCount` (30) slots. Always `true` for the BE469 and BE468. |
+| `schedules.weekDay` / `yearDay` / `dailyRepeating` | The lock reported more than zero slots of that Schedule Entry Lock kind (`scheduleSlots`). `null` until the lock has answered. Writing a kind with `false` is `400 bad_request`. Firmware differs, and the BE469 commonly reports no daily-repeating slots. |
+| `alarmSettings` | The BE469-only alarm settings exist (`true` for BE469/BE469ZP, `false` for BE468). Same as `supportedSettings` containing `alarmMode`. |
 
 Any value is `null` until the lock has reported it, and the BE469-only settings (`alarmMode`, `alertSensitivity`, `tamperSensitivity`, `kickSensitivity`, `localControls`) are always `null` on a BE468 and absent from its `supportedSettings`. Clients should create entities from `supportedSettings`.
 
@@ -53,7 +76,10 @@ Any value is `null` until the lock has reported it, and the BE469-only settings 
 
 | Method and path | Result |
 | --- | --- |
-| `GET /api/v1/locks` | `200 { "locks": LockSummary[] }` |
+| `GET /api/v1/locks` | The enrolled locks. `200 { "locks": LockSummary[] }` |
+| `GET /api/v1/locks/available` | Administrator only. Paired locks not yet enrolled. `200 { "locks": [ { "nodeId", "model", "label", "connectivityStatus", "secure": boolean \| null } ] }` |
+| `PUT /api/v1/locks/{nodeId}/enrollment` | Administrator only. Adds the lock to the alarm system and reads its state. Idempotent. `200 LockSummary`; `404` unknown node; `409 lock_not_secure` |
+| `DELETE /api/v1/locks/{nodeId}/enrollment` | Administrator only. Removes the lock from the alarm system. Idempotent. `204`; `404` unknown node |
 | `GET /api/v1/locks/{nodeId}` | `200 LockSummary` |
 | `POST /api/v1/locks/{nodeId}/refresh` | Re-reads every parameter and the schedule slot counts from the lock. `200 LockSummary` |
 | `PATCH /api/v1/locks/{nodeId}/settings` | Body: any non-empty subset of the writable `settings`. Validated as a whole before anything is written. `200 LockSummary` |
@@ -86,8 +112,11 @@ Any value is `null` until the lock has reported it, and the BE469-only settings 
 
 ## WebSocket
 
-`snapshot` gains `"locks": LockSummary[]` and a `lock.changed` event is sent whenever a lock appears or any of its state changes (a setting, a counter, the occupied slots, connectivity, battery), including values the lock reports on its own:
+`snapshot` gains `"locks": LockSummary[]` and a `lock.changed` event is sent whenever an enrolled lock appears or any of its state changes (a setting, a counter, the occupied slots, connectivity, battery), including values the lock reports on its own:
 
 ```json
 { "type": "lock.changed", "lock": { /* LockSummary */ } }
+{ "type": "lock.removed", "nodeId": 5 }
 ```
+
+`lock.changed` is sent for enrolled locks only; enrolling a lock is the first `lock.changed` for it. `lock.removed` is sent when a lock is unenrolled or leaves the network, and a client removes that lock's device. A reconnecting client rebuilds from the `snapshot`, whose `locks` holds only enrolled locks.

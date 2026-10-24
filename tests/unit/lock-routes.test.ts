@@ -44,9 +44,16 @@ async function buildHarness() {
     setSchedule: vi.fn().mockResolvedValue(undefined),
     getSchedule: vi.fn().mockResolvedValue({ weekday: 1, startHour: 8, startMinute: 0, stopHour: 17, stopMinute: 0 }),
   };
-  const lockService = new LockService(port);
+  const enrolled = new Set([5, 6]);
+  const lockService = new LockService(port, {
+    isEnrolled: (nodeId) => enrolled.has(nodeId),
+    enroll: (nodeId) => void enrolled.add(nodeId),
+    unenroll: (nodeId) => void enrolled.delete(nodeId),
+  });
   lockService.add(5, { model: 'BE469', label: 'Schlage BE469' }, { batteryLevel: 90 });
   lockService.add(6, { model: 'BE468', label: 'Schlage BE468' });
+  lockService.add(7, { model: 'BE469', label: 'Schlage BE469ZP' }, { secure: true });
+  lockService.add(8, { model: 'BE469', label: 'Schlage BE469ZP' }, { secure: false });
   await lockService.refresh(5);
 
   const { createApp } = await import('../../src/api/app.js');
@@ -233,5 +240,56 @@ describe('lock routes', () => {
       expect(port.setScheduleEnabled).toHaveBeenCalledWith(5, 2, false);
       await agent.put('/api/v1/locks/5/users/2/schedules/enabled').send({ enabled: 'no' }).expect(400);
     });
+  });
+
+  it('only lists enrolled locks, and hides a paired one everywhere', async () => {
+    const { app, userRepo } = await buildHarness();
+    const agent = await loginAs(app, userRepo, 'administrator', '1234');
+
+    const res = await agent.get('/api/v1/locks').expect(200);
+
+    expect(res.body.locks.map((lock: { nodeId: number }) => lock.nodeId)).toEqual([5, 6]);
+    await agent.get('/api/v1/locks/7').expect(404);
+    await agent.get('/api/v1/locks/7/users').expect(404);
+    await agent.put('/api/v1/locks/7/users/1/code').send({ code: '1234' }).expect(404);
+  });
+
+  it('lists the paired locks that can be enrolled, to administrators only', async () => {
+    const { app, userRepo } = await buildHarness();
+    const admin = await loginAs(app, userRepo, 'administrator', '1234');
+
+    const res = await admin.get('/api/v1/locks/available').expect(200);
+
+    expect(res.body.locks).toEqual([
+      expect.objectContaining({ nodeId: 7, model: 'BE469', secure: true }),
+      expect.objectContaining({ nodeId: 8, secure: false }),
+    ]);
+    const member = await loginAs(app, userRepo, 'member', '5678');
+    await member.get('/api/v1/locks/available').expect(403);
+  });
+
+  it('enrolls and unenrolls a lock', async () => {
+    const { app, userRepo } = await buildHarness();
+    const admin = await loginAs(app, userRepo, 'administrator', '1234');
+
+    const enrolledRes = await admin.put('/api/v1/locks/7/enrollment').expect(200);
+    expect(enrolledRes.body).toMatchObject({ nodeId: 7, capabilities: { secure: true, userCodes: true } });
+    expect((await admin.get('/api/v1/locks').expect(200)).body.locks).toHaveLength(3);
+
+    await admin.delete('/api/v1/locks/7/enrollment').expect(204);
+    await admin.get('/api/v1/locks/7').expect(404);
+    expect((await admin.get('/api/v1/locks/available').expect(200)).body.locks).toHaveLength(2);
+  });
+
+  it('refuses enrollment for members, unknown nodes and locks without security', async () => {
+    const { app, userRepo } = await buildHarness();
+    const admin = await loginAs(app, userRepo, 'administrator', '1234');
+    const member = await loginAs(app, userRepo, 'member', '5678');
+
+    await member.put('/api/v1/locks/7/enrollment').expect(403);
+    await member.delete('/api/v1/locks/5/enrollment').expect(403);
+    await admin.put('/api/v1/locks/99/enrollment').expect(404);
+    const res = await admin.put('/api/v1/locks/8/enrollment').expect(409);
+    expect(res.body.error.code).toBe('lock_not_secure');
   });
 });

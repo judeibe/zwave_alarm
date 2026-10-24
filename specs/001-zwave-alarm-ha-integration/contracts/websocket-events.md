@@ -58,4 +58,12 @@ Read-only channel for state; all commands (arm/disarm/config changes) go through
 { "type": "lock.changed", "lock": { /* LockSummary */ } }
 ```
 
-Sent when a Schlage lock appears or any of its state changes. See `contracts/locks.md`.
+Sent when an **enrolled** Schlage lock appears or any of its state changes. See `contracts/locks.md`.
+
+### `lock.removed`
+
+```json
+{ "type": "lock.removed", "nodeId": 5 }
+```
+
+Sent when a lock is unenrolled or leaves the Z-Wave network; the client removes its device.
