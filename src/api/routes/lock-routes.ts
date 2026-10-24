@@ -1,11 +1,13 @@
 import { Router, type Request, type Response } from 'express';
 import { ApiError } from '../app.js';
 import { asyncHandler } from '../async-handler.js';
-import { lockScheduleBodySchemas, lockScheduleEnabledBodySchema, lockSettingsBodySchema, lockUserCodeBodySchema, validateBody } from '../validation.js';
+import { lockScheduleBodySchemas, lockScheduleEnabledBodySchema, lockSettingsBodySchema, lockStateBodySchema, lockUserCodeBodySchema, validateBody } from '../validation.js';
 import { requireAuth, requireRole } from '../../auth/authorize.js';
 import {
   LockCommunicationError,
   LockNotFoundError,
+  LockNotSecureError,
+  LockScheduleKindUnsupportedError,
   LockUnsupportedError,
   SCHEDULE_KINDS,
   type LockService,
@@ -24,8 +26,14 @@ function toApiError(err: unknown): unknown {
   if (err instanceof LockNotFoundError) {
     return new ApiError(404, 'not_found', err.message);
   }
+  if (err instanceof LockScheduleKindUnsupportedError) {
+    return new ApiError(400, 'schedule_kind_unsupported', err.message);
+  }
   if (err instanceof LockValueError || err instanceof LockUnsupportedError) {
     return new ApiError(400, 'bad_request', err.message);
+  }
+  if (err instanceof LockNotSecureError) {
+    return new ApiError(409, 'lock_not_secure', err.message);
   }
   if (err instanceof LockCommunicationError) {
     return new ApiError(502, 'lock_unavailable', err.message);
@@ -80,6 +88,29 @@ export function createLockRouter({ lockService }: LockRouteDeps): Router {
     res.status(200).json({ locks: lockService.list() });
   });
 
+  // Paired but not enrolled locks, so an administrator can pick one to add. Never used to create devices.
+  router.get('/locks/available', ...guard, requireRole('administrator'), (_req, res) => {
+    res.status(200).json({ locks: lockService.listAvailable() });
+  });
+
+  router.put(
+    '/locks/:nodeId/enrollment',
+    ...guard,
+    requireRole('administrator'),
+    lockHandler(async (nodeId, _req, res) => {
+      res.status(200).json(await lockService.enroll(nodeId));
+    }),
+  );
+
+  router.delete(
+    '/locks/:nodeId/enrollment',
+    ...guard,
+    requireRole('administrator'),
+    lockHandler(async (nodeId, _req, res) => {
+      res.status(200).json(await lockService.unenroll(nodeId));
+    }),
+  );
+
   router.get(
     '/locks/:nodeId',
     ...guard,
@@ -102,6 +133,15 @@ export function createLockRouter({ lockService }: LockRouteDeps): Router {
     validateBody(lockSettingsBodySchema),
     lockHandler(async (nodeId, req, res) => {
       res.status(200).json(await lockService.updateSettings(nodeId, req.body as SettingsChange));
+    }),
+  );
+
+  router.put(
+    '/locks/:nodeId/state',
+    ...guard,
+    validateBody(lockStateBodySchema),
+    lockHandler(async (nodeId, req, res) => {
+      res.status(200).json(await lockService.setLocked(nodeId, (req.body as { locked: boolean }).locked));
     }),
   );
 

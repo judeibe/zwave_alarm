@@ -137,6 +137,17 @@ const MIGRATIONS: Migration[] = [
       );
     `,
   },
+  {
+    // Z-Wave locks an administrator has added to the alarm system. A Schlage lock that is merely
+    // paired with the controller is not listed here and is never exposed to clients.
+    id: '006_enrolled_locks',
+    sql: `
+      CREATE TABLE enrolled_locks (
+        zwave_node_id INTEGER PRIMARY KEY,
+        enrolled_at INTEGER NOT NULL
+      );
+    `,
+  },
 ];
 
 function ensureMigrationsTable(db: Database.Database): void {

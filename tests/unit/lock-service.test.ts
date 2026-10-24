@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { LockCommunicationError, LockNotFoundError, LockService, LockUnsupportedError, type LockPort } from '../../src/locks/lock-service.js';
+import { LockCommunicationError, LockNotFoundError, LockNotSecureError, LockScheduleKindUnsupportedError, LockService, LockUnsupportedError, type LockEnrollmentStore, type LockPort } from '../../src/locks/lock-service.js';
 import { LockValueError } from '../../src/locks/schlage.js';
 
 const BE469 = { model: 'BE469', label: 'Schlage BE469' } as const;
@@ -19,8 +19,19 @@ function buildPort(raw: Record<number, number> = {}) {
     setScheduleEnabled: vi.fn().mockResolvedValue(undefined),
     setSchedule: vi.fn().mockResolvedValue(undefined),
     getSchedule: vi.fn().mockResolvedValue(undefined),
+    setLocked: vi.fn().mockResolvedValue(undefined),
+    getLocked: vi.fn().mockResolvedValue(true),
   };
   return port satisfies LockPort;
+}
+
+function buildStore(enrolled: number[] = []) {
+  const nodeIds = new Set(enrolled);
+  return {
+    isEnrolled: (nodeId: number) => nodeIds.has(nodeId),
+    enroll: (nodeId: number) => void nodeIds.add(nodeId),
+    unenroll: (nodeId: number) => void nodeIds.delete(nodeId),
+  } satisfies LockEnrollmentStore;
 }
 
 describe('LockService', () => {
@@ -31,7 +42,7 @@ describe('LockService', () => {
   beforeEach(() => {
     raw = { 3: 0xff, 4: 0, 5: 0, 6: 0x01_00_00_00, 7: 1, 8: 3, 9: 3, 10: 5, 11: 0xff, 12: 1200, 13: 40, 14: 2, 15: 0xff, 16: 6, 17: 7, 18: 4 };
     port = buildPort(raw);
-    service = new LockService(port);
+    service = new LockService(port, buildStore([5, 6]));
     service.add(5, BE469);
     service.add(6, BE468);
   });
@@ -140,8 +151,9 @@ describe('LockService', () => {
     });
 
     it('accepts any 4-8 digit code before the PIN length is known', async () => {
-      service.add(7, BE469);
-      await expect(service.setUserCode(7, 1, '12345')).resolves.toBeDefined();
+      const fresh = new LockService(buildPort(), buildStore([7]));
+      fresh.add(7, BE469);
+      await expect(fresh.setUserCode(7, 1, '12345')).resolves.toBeDefined();
     });
 
     it('clears a code', async () => {
@@ -200,5 +212,174 @@ describe('LockService', () => {
 
     expect(service.get(5).settings.beeper).toBe(false);
     expect(changed).toHaveBeenCalledTimes(1);
+  });
+
+  describe('enrollment', () => {
+    it('hides a paired lock from clients until it is enrolled', async () => {
+      const changed = vi.fn();
+      service.on('lock_changed', changed);
+      service.add(7, BE469, { secure: true });
+      service.updateStatus(7, { batteryLevel: 50 });
+
+      expect(service.list().map((lock) => lock.nodeId)).toEqual([5, 6]);
+      expect(service.listAvailable()).toEqual([{ nodeId: 7, model: 'BE469', label: BE469.label, connectivityStatus: 'online', secure: true }]);
+      expect(() => service.get(7)).toThrow(LockNotFoundError);
+      await expect(service.refresh(7)).rejects.toBeInstanceOf(LockNotFoundError);
+      await expect(service.setUserCode(7, 1, '1234')).rejects.toBeInstanceOf(LockNotFoundError);
+      expect(changed).not.toHaveBeenCalled();
+      expect(port.readParameter).not.toHaveBeenCalledWith(7, expect.anything());
+    });
+
+    it('enrolls a lock, reads its state and announces it', async () => {
+      const changed = vi.fn();
+      service.add(7, BE469, { secure: true });
+      service.on('lock_changed', changed);
+
+      const summary = await service.enroll(7);
+
+      expect(summary).toMatchObject({ nodeId: 7, settings: { beeper: true }, scheduleSlots: { weekDay: 7 } });
+      expect(service.list().map((lock) => lock.nodeId)).toEqual([5, 6, 7]);
+      expect(service.listAvailable()).toEqual([]);
+      expect(changed).toHaveBeenCalledWith(expect.objectContaining({ nodeId: 7 }));
+      await expect(service.enroll(7)).resolves.toMatchObject({ nodeId: 7 });
+    });
+
+    it('refuses to enroll an unknown lock, or one included without security', async () => {
+      service.add(7, BE469, { secure: false });
+
+      await expect(service.enroll(99)).rejects.toBeInstanceOf(LockNotFoundError);
+      await expect(service.enroll(7)).rejects.toBeInstanceOf(LockNotSecureError);
+      expect(service.list().map((lock) => lock.nodeId)).toEqual([5, 6]);
+    });
+
+    it('unenrolls a lock, announcing the removal, and sends it back to available', async () => {
+      const removed = vi.fn();
+      service.on('lock_removed', removed);
+
+      await expect(service.unenroll(5)).resolves.toEqual({ nodeId: 5, cleared: true, failures: [] });
+      await expect(service.unenroll(5)).resolves.toEqual({ nodeId: 5, cleared: true, failures: [] });
+
+      expect(removed).toHaveBeenCalledTimes(1);
+      expect(removed).toHaveBeenCalledWith(5);
+      expect(service.list().map((lock) => lock.nodeId)).toEqual([6]);
+      expect(service.listAvailable().map((lock) => lock.nodeId)).toEqual([5]);
+      expect(() => service.get(5)).toThrow(LockNotFoundError);
+      await expect(service.unenroll(99)).rejects.toBeInstanceOf(LockNotFoundError);
+    });
+
+    it('clears the schedules and code of every occupied user before unenrolling', async () => {
+      raw[6] = 0x05_00_00_00; // slots 1 and 3
+      port.getScheduleSlotCounts.mockResolvedValue({ weekDay: 2, yearDay: 0, dailyRepeating: 1 });
+
+      const result = await service.unenroll(5);
+
+      expect(result.cleared).toBe(true);
+      expect(port.clearUserCode.mock.calls).toEqual([[5, 1], [5, 3]]);
+      expect(port.setSchedule).toHaveBeenCalledTimes(6);
+      expect(port.setSchedule).toHaveBeenCalledWith(5, 'weekDay', 3, 2, undefined);
+      expect(port.setSchedule).toHaveBeenCalledWith(5, 'dailyRepeating', 1, 1, undefined);
+      expect(port.setSchedule).not.toHaveBeenCalledWith(5, 'yearDay', expect.anything(), expect.anything(), undefined);
+      expect(service.isEnrolled(5)).toBe(false);
+    });
+
+    it('still unenrolls an unreachable lock, reporting that nothing was cleared and giving up at once', async () => {
+      port.setSchedule.mockRejectedValue(new Error('timeout'));
+      port.clearUserCode.mockRejectedValue(new Error('timeout'));
+      const removed = vi.fn();
+      service.on('lock_removed', removed);
+
+      const result = await service.unenroll(5);
+
+      expect(result.cleared).toBe(false);
+      expect(result.failures).toHaveLength(1);
+      expect(result.failures[0]).toContain('timeout');
+      expect(removed).toHaveBeenCalledOnce();
+      expect(service.isEnrolled(5)).toBe(false);
+    });
+
+    it('carries on past a later failure and lists every failed step', async () => {
+      raw[6] = 0x03_00_00_00; // slots 1 and 2
+      port.getScheduleSlotCounts.mockResolvedValue({ weekDay: 0, yearDay: 0, dailyRepeating: 0 });
+      port.clearUserCode.mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error('rejected'));
+
+      const result = await service.unenroll(5);
+
+      expect(result).toMatchObject({ cleared: false, failures: ['user code 2: rejected'] });
+    });
+
+    it('drops the enrollment of a lock that leaves the network', () => {
+      const removed = vi.fn();
+      service.on('lock_removed', removed);
+
+      service.remove(5);
+      service.remove(99);
+
+      expect(removed).toHaveBeenCalledOnce();
+      expect(service.isEnrolled(5)).toBe(false);
+      expect(service.listAvailable()).toEqual([]);
+    });
+  });
+
+  describe('capabilities', () => {
+    it('derives schedule support from the slot counts, and unknown before they are read', async () => {
+      expect(service.get(5).capabilities).toEqual({
+        secure: null,
+        userCodes: true,
+        schedules: { weekDay: null, yearDay: null, dailyRepeating: null },
+        alarmSettings: true,
+      });
+      port.getScheduleSlotCounts.mockResolvedValue({ weekDay: 7, yearDay: 7, dailyRepeating: 0 });
+
+      await service.refresh(5);
+
+      expect(service.get(5).capabilities.schedules).toEqual({ weekDay: true, yearDay: true, dailyRepeating: false });
+      expect(service.get(6).capabilities.alarmSettings).toBe(false);
+    });
+
+    it('rejects a schedule kind the lock has no slots for with a distinct error', async () => {
+      port.getScheduleSlotCounts.mockResolvedValue({ weekDay: 7, yearDay: 0, dailyRepeating: 0 });
+      await service.refresh(5);
+
+      await expect(service.getSchedule(5, 'yearDay', 1, 1)).rejects.toBeInstanceOf(LockScheduleKindUnsupportedError);
+      await expect(service.clearSchedule(5, 'dailyRepeating', 1, 1)).rejects.toBeInstanceOf(LockUnsupportedError);
+      expect(port.setSchedule).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('lock state', () => {
+    it('reads the state on refresh and follows what the lock reports', async () => {
+      const changed = vi.fn();
+      await service.refresh(5);
+      expect(service.get(5).locked).toBe(true);
+      service.on('lock_changed', changed);
+
+      service.recordLocked(5, false);
+      service.recordLocked(5, false);
+
+      expect(service.get(5).locked).toBe(false);
+      expect(changed).toHaveBeenCalledTimes(1);
+      expect(changed).toHaveBeenCalledWith(expect.objectContaining({ nodeId: 5, locked: false }));
+    });
+
+    it('locks and unlocks through the port, and wraps a failure', async () => {
+      await service.setLocked(5, false);
+      await service.setLocked(5, true);
+      expect(port.setLocked.mock.calls).toEqual([[5, false], [5, true]]);
+
+      port.setLocked.mockRejectedValueOnce(new Error('jammed'));
+      await expect(service.setLocked(5, true)).rejects.toBeInstanceOf(LockCommunicationError);
+      service.add(7, BE469);
+      await expect(service.setLocked(7, true)).rejects.toBeInstanceOf(LockNotFoundError);
+    });
+
+    it('does not announce the state of a lock that is not enrolled', () => {
+      const changed = vi.fn();
+      service.on('lock_changed', changed);
+      service.add(7, BE469);
+
+      service.recordLocked(7, true);
+
+      expect(changed).not.toHaveBeenCalled();
+    });
   });
 });

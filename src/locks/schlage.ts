@@ -184,3 +184,22 @@ export function validatePin(code: string, pinLength: number | null): void {
     throw new LockValueError(`The lock is set to ${String(pinLength)}-digit codes`);
   }
 }
+
+/** Door Lock CC `currentMode`: 0xFF is secured (bolt thrown), 0xFE unknown, every other value some kind of unsecured. */
+export function lockedFromDoorLockMode(mode: number): boolean | null {
+  if (mode === 0xff) {
+    return true;
+  }
+  return mode === 0xfe ? null : false;
+}
+
+/**
+ * Notification CC, Access Control (type 6) events that say where the bolt is: 1/3/5/9 manual, RF,
+ * keypad and auto lock; 2/4/6 manual, RF and keypad unlock. Anything else (jammed, tamper...) says nothing.
+ */
+export function lockedFromAccessControlEvent(event: number): boolean | undefined {
+  if ([0x01, 0x03, 0x05, 0x09].includes(event)) {
+    return true;
+  }
+  return [0x02, 0x04, 0x06].includes(event) ? false : undefined;
+}

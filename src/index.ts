@@ -31,6 +31,7 @@ import { KeypadSettingsRepository, KeypadSettingsService } from './keypads/keypa
 import { KeypadController } from './keypads/keypad-controller.js';
 import { KeypadGateway } from './zwave/keypad-gateway.js';
 import { LockService } from './locks/lock-service.js';
+import { LockEnrollmentRepository } from './db/repositories/lock-enrollment-repository.js';
 import { ZwaveLockGateway } from './zwave/lock-gateway.js';
 
 const logger = createLogger('index');
@@ -96,7 +97,9 @@ const lockService = new LockService({
   setScheduleEnabled: (...args) => lockGateway.setScheduleEnabled(...args),
   setSchedule: (...args) => lockGateway.setSchedule(...args),
   getSchedule: (...args) => lockGateway.getSchedule(...args),
-});
+  setLocked: (...args) => lockGateway.setLocked(...args),
+  getLocked: (...args) => lockGateway.getLocked(...args),
+}, new LockEnrollmentRepository(db));
 const lockGateway: ZwaveLockGateway = new ZwaveLockGateway(driver, lockService);
 // KEYPAD_REQUIRE_CODE_TO_ARM is only the default; an administrator's choice (PATCH /keypad-settings) wins.
 const keypadSettings = new KeypadSettingsService(new KeypadSettingsRepository(db), {

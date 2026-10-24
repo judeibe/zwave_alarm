@@ -86,6 +86,10 @@ export interface LockPort {
   setScheduleEnabled(nodeId: number, userId: number, enabled: boolean): Promise<void>;
   setSchedule<K extends ScheduleKind>(nodeId: number, kind: K, userId: number, slotId: number, schedule: ScheduleByKind[K] | undefined): Promise<void>;
   getSchedule<K extends ScheduleKind>(nodeId: number, kind: K, userId: number, slotId: number): Promise<ScheduleByKind[K] | undefined>;
+  /** Door Lock CC: throw (`true`) or retract (`false`) the bolt. */
+  setLocked(nodeId: number, locked: boolean): Promise<void>;
+  /** Door Lock CC: whether the bolt is thrown, `undefined` when the lock does not say. */
+  getLocked(nodeId: number): Promise<boolean | undefined>;
 }
 
 /** The read/write parameters of a lock, by API key. `null` is "not read yet" or "this model has none". */
@@ -141,6 +145,16 @@ export const DIAGNOSTIC_KEYS = [
   'bootloaderVersion',
 ] as const satisfies ReadonlyArray<keyof LockDiagnostics>;
 
+/** What a lock can do, so clients only offer what works. Schedule kinds are `null` until the lock has reported its slot counts. */
+export interface LockCapabilities {
+  /** Whether the lock was included with S0/S2; User Code and Schedule Entry Lock need it. `null` when unknown. */
+  secure: boolean | null;
+  userCodes: boolean;
+  schedules: { weekDay: boolean | null; yearDay: boolean | null; dailyRepeating: boolean | null };
+  /** BE469 only: alarm mode and sensitivities. */
+  alarmSettings: boolean;
+}
+
 /** The `LockSummary` of contracts/locks.md: what clients see of a lock. */
 export interface LockSummary {
   nodeId: number;
@@ -155,11 +169,54 @@ export interface LockSummary {
   /** Schedule slots per user; `null` until the lock has answered. */
   scheduleSlots: ScheduleSlotCounts | null;
   userSlotCount: number;
+  /** Whether the bolt is thrown; `null` until the lock has reported it, or while it says unknown. */
+  locked: boolean | null;
+  capabilities: LockCapabilities;
+}
+
+/** A Schlage lock paired with the controller but not (yet) added to the alarm system. */
+export interface AvailableLock {
+  nodeId: number;
+  model: LockModel;
+  label: string;
+  connectivityStatus: ConnectivityStatus;
+  secure: boolean | null;
+}
+
+/** Where the set of enrolled lock nodes is kept; `LockEnrollmentRepository` persists it. */
+export interface LockEnrollmentStore {
+  isEnrolled(nodeId: number): boolean;
+  enroll(nodeId: number): void;
+  unenroll(nodeId: number): void;
+}
+
+class MemoryEnrollmentStore implements LockEnrollmentStore {
+  private readonly nodeIds = new Set<number>();
+  isEnrolled(nodeId: number): boolean {
+    return this.nodeIds.has(nodeId);
+  }
+  enroll(nodeId: number): void {
+    this.nodeIds.add(nodeId);
+  }
+  unenroll(nodeId: number): void {
+    this.nodeIds.delete(nodeId);
+  }
+}
+
+/** What was left on a lock when it was unenrolled. `failures` is empty when everything was cleared. */
+export interface UnenrollResult {
+  nodeId: number;
+  cleared: boolean;
+  failures: string[];
 }
 
 export class LockNotFoundError extends Error {}
 /** The lock exists but cannot do what was asked (a BE469-only setting on a BE468). */
 export class LockUnsupportedError extends Error {}
+/** The lock was not included securely (S0/S2), so user codes and schedules cannot work; it cannot be enrolled. */
+export class LockNotSecureError extends Error {}
+/** A schedule kind the lock reports no slots for (some firmware has no week-day, year-day or daily-repeating schedules). */
+export class LockScheduleKindUnsupportedError extends LockUnsupportedError {}
 /** The lock did not answer, or rejected a write. */
 export class LockCommunicationError extends Error {}
 
@@ -168,6 +225,8 @@ interface LockEntry {
   label: string;
   connectivityStatus: ConnectivityStatus;
   batteryLevel: number | null;
+  secure: boolean | null;
+  locked: boolean | null;
   raw: Map<string, number>;
   scheduleSlots: ScheduleSlotCounts | null;
 }
@@ -179,40 +238,148 @@ const MAX_SCHEDULE_SLOT = 255;
  * diagnostics counters, user codes and Schedule Entry Lock schedules. All parameter handling is
  * table-driven from `SCHLAGE_PARAMETERS`, so it never knows an individual parameter's number.
  *
- * Emits `'lock_changed'` (LockSummary) when a lock appears or any of its state changes.
+ * A Schlage node on the network is only *discovered*. It is exposed to clients (`list`, `get`, every
+ * operation, `lock_changed`) once an administrator has *enrolled* it into the alarm system; until
+ * then it shows up only in `listAvailable`. Enrollment is kept in the `LockEnrollmentStore`.
+ *
+ * Emits `'lock_changed'` (LockSummary) when an enrolled lock appears or any of its state changes,
+ * and `'lock_removed'` (nodeId) when it is unenrolled or leaves the network.
  */
 export class LockService extends EventEmitter {
   private readonly locks = new Map<number, LockEntry>();
 
-  constructor(private readonly port: LockPort) {
+  constructor(
+    private readonly port: LockPort,
+    private readonly enrollment: LockEnrollmentStore = new MemoryEnrollmentStore(),
+  ) {
     super();
   }
 
-  add(nodeId: number, identity: { model: LockModel; label: string }, initial: Partial<Pick<LockEntry, 'connectivityStatus' | 'batteryLevel'>> = {}): LockSummary {
-    const existing = this.locks.get(nodeId);
-    if (existing) {
-      return this.summarize(nodeId, existing);
+  /** Records a Schlage node found on the network. It stays hidden from clients until it is enrolled. */
+  add(nodeId: number, identity: { model: LockModel; label: string }, initial: Partial<Pick<LockEntry, 'connectivityStatus' | 'batteryLevel' | 'secure'>> = {}): void {
+    if (this.locks.has(nodeId)) {
+      return;
     }
     const entry: LockEntry = {
       model: identity.model,
       label: identity.label,
       connectivityStatus: initial.connectivityStatus ?? 'online',
       batteryLevel: initial.batteryLevel ?? null,
+      secure: initial.secure ?? null,
+      locked: null,
       raw: new Map(),
       scheduleSlots: null,
     };
     this.locks.set(nodeId, entry);
-    const summary = this.summarize(nodeId, entry);
-    this.emit('lock_changed', summary);
-    return summary;
+    if (this.enrollment.isEnrolled(nodeId)) {
+      this.emit('lock_changed', this.summarize(nodeId, entry));
+    }
   }
 
-  has(nodeId: number): boolean {
-    return this.locks.has(nodeId);
+  /** True when the node is a Schlage lock that has been added to the alarm system. */
+  isEnrolled(nodeId: number): boolean {
+    return this.locks.has(nodeId) && this.enrollment.isEnrolled(nodeId);
   }
 
+  /** The enrolled locks: the only ones clients ever see. */
   list(): LockSummary[] {
-    return [...this.locks].map(([nodeId, entry]) => this.summarize(nodeId, entry));
+    return [...this.locks].filter(([nodeId]) => this.enrollment.isEnrolled(nodeId)).map(([nodeId, entry]) => this.summarize(nodeId, entry));
+  }
+
+  /** Locks paired with the controller but not added to the alarm system; candidates for `enroll`. */
+  listAvailable(): AvailableLock[] {
+    return [...this.locks]
+      .filter(([nodeId]) => !this.enrollment.isEnrolled(nodeId))
+      .map(([nodeId, entry]) => ({ nodeId, model: entry.model, label: entry.label, connectivityStatus: entry.connectivityStatus, secure: entry.secure }));
+  }
+
+  /**
+   * Adds a discovered lock to the alarm system and reads its state. Idempotent. Refuses a lock known
+   * to be included without S0/S2, since its user codes and schedules could not be managed.
+   */
+  async enroll(nodeId: number): Promise<LockSummary> {
+    const entry = this.locks.get(nodeId);
+    if (!entry) {
+      throw new LockNotFoundError(`No lock with node id ${String(nodeId)}`);
+    }
+    if (this.enrollment.isEnrolled(nodeId)) {
+      return this.summarize(nodeId, entry);
+    }
+    if (entry.secure === false) {
+      throw new LockNotSecureError('The lock was included without security. Exclude it and include it again with S0 or S2.');
+    }
+    this.enrollment.enroll(nodeId);
+    logger.info('lock enrolled', { nodeId, model: entry.model });
+    return this.refresh(nodeId);
+  }
+
+  /**
+   * Takes a lock out of the alarm system, first clearing every user code and schedule on it so the
+   * codes do not keep working unmanaged. The lock is unenrolled even when it cannot be cleared (it is
+   * offline, say): `cleared` is then `false` and `failures` says what is left on the lock. Idempotent;
+   * a lock that is not enrolled has nothing to clear.
+   */
+  async unenroll(nodeId: number): Promise<UnenrollResult> {
+    if (!this.locks.has(nodeId) && !this.enrollment.isEnrolled(nodeId)) {
+      throw new LockNotFoundError(`No lock with node id ${String(nodeId)}`);
+    }
+    if (!this.isEnrolled(nodeId)) {
+      this.enrollment.unenroll(nodeId);
+      return { nodeId, cleared: true, failures: [] };
+    }
+    const failures = await this.clearLock(nodeId);
+    this.enrollment.unenroll(nodeId);
+    logger.info('lock unenrolled', { nodeId, cleared: failures.length === 0 });
+    this.emit('lock_removed', nodeId);
+    return { nodeId, cleared: failures.length === 0, failures };
+  }
+
+  /**
+   * Clears the schedules and then the code of every occupied user slot (every slot when the occupied
+   * ones are unknown). A first step that fails means the lock is unreachable, so the rest is skipped
+   * rather than waiting out a timeout per slot; later failures are collected and the clearing goes on.
+   */
+  private async clearLock(nodeId: number): Promise<string[]> {
+    const entry = this.entry(nodeId);
+    await this.readInto(nodeId, entry, requiredDefinition('userSlotBitField'));
+    const slots = await this.scheduleSlots(nodeId).catch(() => null);
+    const users = this.occupied(entry) ?? Array.from({ length: USER_SLOT_COUNT }, (_, index) => index + 1);
+
+    const failures: string[] = [];
+    let attempted = 0;
+    const step = async (what: string, run: () => Promise<void>): Promise<boolean> => {
+      try {
+        await run();
+        attempted++;
+        return true;
+      } catch (err) {
+        failures.push(`${what}: ${errorMessage(err)}`);
+        return attempted > 0;
+      }
+    };
+
+    for (const userId of users) {
+      for (const kind of SCHEDULE_KINDS) {
+        for (let slotId = 1; slotId <= (slots?.[kind] ?? 0); slotId++) {
+          if (!(await step(`${kind} schedule ${String(userId)}/${String(slotId)}`, () => this.port.setSchedule(nodeId, kind, userId, slotId, undefined)))) {
+            return failures;
+          }
+        }
+      }
+      if (!(await step(`user code ${String(userId)}`, () => this.port.clearUserCode(nodeId, userId)))) {
+        return failures;
+      }
+    }
+    return failures;
+  }
+
+  /** The node left the Z-Wave network: forget it and, if it was enrolled, drop the enrollment too. */
+  remove(nodeId: number): void {
+    this.locks.delete(nodeId);
+    if (this.enrollment.isEnrolled(nodeId)) {
+      this.enrollment.unenroll(nodeId);
+      this.emit('lock_removed', nodeId);
+    }
   }
 
   get(nodeId: number): LockSummary {
@@ -231,7 +398,27 @@ export class LockService extends EventEmitter {
     }
     entry.connectivityStatus = connectivityStatus;
     entry.batteryLevel = batteryLevel;
-    this.emit('lock_changed', this.summarize(nodeId, entry));
+    this.publish(nodeId, entry);
+  }
+
+  /**
+   * Throws or retracts the bolt. The lock moves after it answers, so the returned summary may still
+   * show the old state; the new one arrives as a `lock_changed` when the lock reports it.
+   */
+  async setLocked(nodeId: number, locked: boolean): Promise<LockSummary> {
+    const entry = this.entry(nodeId);
+    await this.communicate(locked ? 'Locking' : 'Unlocking', () => this.port.setLocked(nodeId, locked));
+    return this.summarize(nodeId, entry);
+  }
+
+  /** Records the bolt state the lock reported (a Door Lock report or an Access Control notification). */
+  recordLocked(nodeId: number, locked: boolean | null): void {
+    const entry = this.locks.get(nodeId);
+    if (!entry || entry.locked === locked) {
+      return;
+    }
+    entry.locked = locked;
+    this.publish(nodeId, entry);
   }
 
   /** Records a parameter value the lock reported unprompted (a Configuration Report), so clients see it without a poll. */
@@ -242,7 +429,7 @@ export class LockService extends EventEmitter {
       return;
     }
     entry.raw.set(definition.key, raw);
-    this.emit('lock_changed', this.summarize(nodeId, entry));
+    this.publish(nodeId, entry);
   }
 
   /**
@@ -258,6 +445,11 @@ export class LockService extends EventEmitter {
       entry.scheduleSlots = (await this.port.getScheduleSlotCounts(nodeId)) ?? entry.scheduleSlots;
     } catch (err) {
       logger.warn('reading schedule slot counts failed', { nodeId, error: errorMessage(err) });
+    }
+    try {
+      entry.locked = (await this.port.getLocked(nodeId)) ?? entry.locked;
+    } catch (err) {
+      logger.warn('reading the lock state failed', { nodeId, error: errorMessage(err) });
     }
     return this.publish(nodeId, entry);
   }
@@ -362,6 +554,9 @@ export class LockService extends EventEmitter {
   private assertSlot(entry: LockEntry, kind: ScheduleKind, userId: number, slotId: number): void {
     assertUserId(userId);
     const count = entry.scheduleSlots?.[kind] ?? MAX_SCHEDULE_SLOT;
+    if (count === 0) {
+      throw new LockScheduleKindUnsupportedError(`This lock does not support ${kind} schedules`);
+    }
     if (!Number.isInteger(slotId) || slotId < 1 || slotId > count) {
       throw new LockValueError(`${kind} slot must be an integer from 1 to ${String(count)}`);
     }
@@ -386,15 +581,19 @@ export class LockService extends EventEmitter {
     }
   }
 
+  /** Emits `lock_changed`, but only for an enrolled lock: clients never hear about the others. */
   private publish(nodeId: number, entry: LockEntry): LockSummary {
     const summary = this.summarize(nodeId, entry);
-    this.emit('lock_changed', summary);
+    if (this.enrollment.isEnrolled(nodeId)) {
+      this.emit('lock_changed', summary);
+    }
     return summary;
   }
 
+  /** The enrolled lock, or `LockNotFoundError`: a lock that is only paired looks the same as no lock. */
   private entry(nodeId: number): LockEntry {
     const entry = this.locks.get(nodeId);
-    if (!entry) {
+    if (!entry || !this.enrollment.isEnrolled(nodeId)) {
       throw new LockNotFoundError(`No lock with node id ${String(nodeId)}`);
     }
     return entry;
@@ -460,6 +659,17 @@ export class LockService extends EventEmitter {
       },
       scheduleSlots: entry.scheduleSlots,
       userSlotCount: USER_SLOT_COUNT,
+      locked: entry.locked,
+      capabilities: {
+        secure: entry.secure,
+        userCodes: true,
+        schedules: {
+          weekDay: entry.scheduleSlots && entry.scheduleSlots.weekDay > 0,
+          yearDay: entry.scheduleSlots && entry.scheduleSlots.yearDay > 0,
+          dailyRepeating: entry.scheduleSlots && entry.scheduleSlots.dailyRepeating > 0,
+        },
+        alarmSettings: parametersForModel(entry.model).some((definition) => definition.key === 'alarmMode'),
+      },
     };
   }
 }

@@ -133,6 +133,10 @@ export function attachWsBroadcaster(wss: WebSocketServer, deps: WsBroadcasterDep
     broadcast(wss, { type: 'lock.changed', lock });
   });
 
+  deps.lockService?.on('lock_removed', (nodeId: number) => {
+    broadcast(wss, { type: 'lock.removed', nodeId });
+  });
+
   deps.eventRepo.on('event_recorded', (event: SecurityEvent) => {
     broadcast(wss, {
       type: 'event.recorded',
