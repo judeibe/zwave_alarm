@@ -24,6 +24,8 @@ import { createHaLinkRouter } from './routes/ha-link-routes.js';
 import { createLockoutPolicyRouter } from './routes/lockout-policy-routes.js';
 import { createKeypadRouter } from './routes/keypad-routes.js';
 import type { KeypadService } from '../keypads/keypad-service.js';
+import { createLockRouter } from './routes/lock-routes.js';
+import type { LockService } from '../locks/lock-service.js';
 
 /**
  * Thrown by route handlers to produce the `{ error: { code, message } }`
@@ -94,6 +96,8 @@ export interface AppDeps {
   haLinkRepo: HaLinkRepository;
   /** Optional: the keypad routes (`/keypads`) are mounted only when supplied. */
   keypadService?: KeypadService;
+  /** Optional: the Schlage lock routes (`/locks`) are mounted only when supplied. */
+  lockService?: LockService;
   /** Only `controller.nodes` is read (zone-routes.ts validates an assigned zwaveNodeId against it). */
   driver: Pick<Driver, 'controller'>;
   /** Reports the driver's start-up state on `GET /api/v1/panel`; src/index.ts passes `getDriverState`. */
@@ -169,6 +173,9 @@ export function createApp(deps?: AppDeps): Express {
     app.use('/api/v1', createLockoutPolicyRouter(routeDeps));
     if (deps.keypadService) {
       app.use('/api/v1', createKeypadRouter({ keypadService: deps.keypadService }));
+    }
+    if (deps.lockService) {
+      app.use('/api/v1', createLockRouter({ lockService: deps.lockService }));
     }
   }
 

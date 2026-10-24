@@ -29,6 +29,8 @@ import { discoverKeypadAdapters } from './keypads/discovery.js';
 import { KeypadService } from './keypads/keypad-service.js';
 import { KeypadController } from './keypads/keypad-controller.js';
 import { KeypadGateway } from './zwave/keypad-gateway.js';
+import { LockService } from './locks/lock-service.js';
+import { ZwaveLockGateway } from './zwave/lock-gateway.js';
 
 const logger = createLogger('index');
 
@@ -72,6 +74,7 @@ driver.on('driver ready', () => {
     .catch((err: unknown) => {
       logger.error('keypad support failed to start', { error: err instanceof Error ? err.message : String(err) });
     });
+  lockGateway.start();
 });
 const siren = new Siren(driver, panelService, { nodeId: config.sirenNodeId });
 
@@ -81,11 +84,24 @@ const KEYPAD_ADAPTERS_DIR = join(dirname(fileURLToPath(import.meta.url)), 'keypa
 const keypadRegistry = new KeypadAdapterRegistry();
 const keypadService = new KeypadService((nodeId, writes) => keypadGateway.writeValues(nodeId, writes));
 const keypadGateway: KeypadGateway = new KeypadGateway(driver, keypadRegistry, keypadService);
+// Schlage locks (src/locks): recognised by manufacturer/product id, so there is nothing to configure.
+const lockService = new LockService({
+  readParameter: (...args) => lockGateway.readParameter(...args),
+  writeParameter: (...args) => lockGateway.writeParameter(...args),
+  setUserCode: (...args) => lockGateway.setUserCode(...args),
+  clearUserCode: (...args) => lockGateway.clearUserCode(...args),
+  getUserSlot: (...args) => lockGateway.getUserSlot(...args),
+  getScheduleSlotCounts: (...args) => lockGateway.getScheduleSlotCounts(...args),
+  setScheduleEnabled: (...args) => lockGateway.setScheduleEnabled(...args),
+  setSchedule: (...args) => lockGateway.setSchedule(...args),
+  getSchedule: (...args) => lockGateway.getSchedule(...args),
+});
+const lockGateway: ZwaveLockGateway = new ZwaveLockGateway(driver, lockService);
 new KeypadController(keypadService, panelService, userRepo, lockoutService, eventRepo, zoneRepo, {
   requireCodeToArm: config.keypadRequireCodeToArm,
 }).start();
 
-const app = createApp({ panelService, userRepo, zoneRepo, sensorRepo, lockoutService, eventRepo, haLinkRepo, driver, keypadService, driverState: getDriverState });
+const app = createApp({ panelService, userRepo, zoneRepo, sensorRepo, lockoutService, eventRepo, haLinkRepo, driver, keypadService, lockService, driverState: getDriverState });
 const httpServer = createServer(app);
 
 // Shares the REST API's HTTP server/port, per contracts/websocket-events.md's
@@ -98,9 +114,9 @@ const wss = createWebSocketServer(
     path: '/api/v1/stream',
     verifyClient: createWsVerifyClient({ haLinkLookup: haLinkRepo, sessionMiddleware }),
   },
-  () => buildLiveSnapshot({ panelService, zoneRepo, keypadService, driverStatus }),
+  () => buildLiveSnapshot({ panelService, zoneRepo, keypadService, lockService, driverStatus }),
 );
-attachWsBroadcaster(wss, { panelService, sensorMapper, eventRepo, zoneRepo, keypadService, driverStatus });
+attachWsBroadcaster(wss, { panelService, sensorMapper, eventRepo, zoneRepo, keypadService, lockService, driverStatus });
 
 // After the siren and broadcaster are listening: re-schedules an exit/entry delay that was in
 // flight when the service last stopped (SC-006), which may itself commit a transition.

@@ -9,7 +9,7 @@ On connect, the server sends one `snapshot` event with the full current state, t
 ### `snapshot`
 
 ```json
-{ "type": "snapshot", "panel": { "mode": "armed_away", "pendingDelayEndsAt": null, "disarmedZoneIds": [] }, "zones": [ /* Zone + SensorDevice[] */ ], "driver": { "status": "ready", "lastError": null, "attempts": 1, "nextRetryAt": null } }
+{ "type": "snapshot", "panel": { "mode": "armed_away", "pendingDelayEndsAt": null, "disarmedZoneIds": [] }, "zones": [ /* Zone + SensorDevice[] */ ], "driver": { "status": "ready", "lastError": null, "attempts": 1, "nextRetryAt": null }, "locks": [ /* LockSummary, only with Schlage support */ ] }
 ```
 
 `driver` is the state of the service's Z-Wave driver, the same object as `driver` on `GET /api/v1/panel`.
@@ -51,3 +51,11 @@ Sent on every change of the Z-Wave driver's state, with the fields of `driver` o
 ## Client → server messages
 
 Read-only channel for state; all commands (arm/disarm/config changes) go through the REST API (`contracts/rest-api.md`) so that FR-014's conflict-resolution rule has a single command path to arbitrate. The only client → server message on this channel is a periodic `ping` (server replies `pong`) for connection liveness.
+
+### `lock.changed`
+
+```json
+{ "type": "lock.changed", "lock": { /* LockSummary */ } }
+```
+
+Sent when a Schlage lock appears or any of its state changes. See `contracts/locks.md`.

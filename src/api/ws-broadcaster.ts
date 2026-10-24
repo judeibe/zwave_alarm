@@ -6,6 +6,7 @@ import type { SensorDevice } from '../db/repositories/sensor-repository.js';
 import type { ZoneRepository } from '../db/repositories/zone-repository.js';
 import { EventRepository, type SecurityEvent } from '../events/event-repository.js';
 import type { DriverState } from '../zwave/driver.js';
+import type { LockService, LockSummary } from '../locks/lock-service.js';
 import type { KeypadPublicEvent, KeypadService, KeypadSummary } from '../keypads/keypad-service.js';
 
 export interface WsBroadcasterDeps {
@@ -15,6 +16,8 @@ export interface WsBroadcasterDeps {
   zoneRepo: ZoneRepository;
   /** Optional: keypad events and the snapshot's `keypads` are only sent when supplied. */
   keypadService?: KeypadService;
+  /** Optional: `lock.changed` events and the snapshot's `locks` are only sent when supplied. */
+  lockService?: LockService;
   /** Optional: `driver.state` events are only sent when supplied (src/index.ts passes the real driver's). */
   driverStatus?: DriverStatusSource;
 }
@@ -30,13 +33,14 @@ export interface DriverStatusSource {
  * live state, for use as `src/api/ws.ts`'s `createWebSocketServer`
  * `buildSnapshot` argument.
  */
-export function buildLiveSnapshot(deps: Pick<WsBroadcasterDeps, 'panelService' | 'zoneRepo' | 'keypadService' | 'driverStatus'>): Record<string, unknown> {
+export function buildLiveSnapshot(deps: Pick<WsBroadcasterDeps, 'panelService' | 'zoneRepo' | 'keypadService' | 'lockService' | 'driverStatus'>): Record<string, unknown> {
   const panel = deps.panelService.getState();
   return {
     type: 'snapshot',
     panel: { mode: panel.mode, pendingDelayEndsAt: panel.pendingDelayEndsAt, disarmedZoneIds: panel.disarmedZoneIds },
     zones: deps.zoneRepo.list(),
     ...(deps.keypadService && { keypads: deps.keypadService.list() }),
+    ...(deps.lockService && { locks: deps.lockService.list() }),
     ...(deps.driverStatus && { driver: deps.driverStatus.get() }),
   };
 }
@@ -115,6 +119,10 @@ export function attachWsBroadcaster(wss: WebSocketServer, deps: WsBroadcasterDep
   // The service's public event never carries the entered code, so it is safe to fan out as-is.
   deps.keypadService?.on('keypad_event', (event: KeypadPublicEvent) => {
     broadcast(wss, { type: 'keypad.event', nodeId: event.nodeId, adapterId: event.adapterId, input: event.input });
+  });
+
+  deps.lockService?.on('lock_changed', (lock: LockSummary) => {
+    broadcast(wss, { type: 'lock.changed', lock });
   });
 
   deps.eventRepo.on('event_recorded', (event: SecurityEvent) => {
