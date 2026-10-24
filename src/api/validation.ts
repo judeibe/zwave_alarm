@@ -162,3 +162,79 @@ export const chimeBodySchema = z.object({
   sound: z.string().min(1).max(MAX_NAME_LENGTH),
   volume: z.number().int().min(0).max(99).optional(),
 });
+
+const sensitivity = z.number().int().min(0).max(5);
+
+/** `PATCH /api/v1/locks/{nodeId}/settings` body: any subset of the writable settings, at least one. */
+export const lockSettingsBodySchema = z
+  .object({
+    beeper: z.boolean(),
+    vacationMode: z.boolean(),
+    lockAndLeave: z.boolean(),
+    autoLock: z.boolean(),
+    pinLength: z.number().int().min(4).max(8),
+    alarmMode: z.enum(['off', 'alert', 'tamper', 'forced_entry']),
+    alertSensitivity: sensitivity,
+    tamperSensitivity: sensitivity,
+    kickSensitivity: sensitivity,
+    localControls: z.boolean(),
+  })
+  .partial()
+  .strict()
+  .refine(nonEmpty, NON_EMPTY_MESSAGE);
+
+/** `PUT /api/v1/locks/{nodeId}/users/{userId}/code` body. The PIN length is checked against the lock's setting. */
+export const lockUserCodeBodySchema = z.object({
+  code: z.string().min(1, 'must not be empty').max(16),
+  status: z.enum(['enabled', 'disabled']).optional(),
+});
+
+/** `PUT /api/v1/locks/{nodeId}/users/{userId}/schedules/enabled` body. */
+export const lockScheduleEnabledBodySchema = z.object({ enabled: z.boolean() });
+
+const hour = z.number().int().min(0).max(23);
+const minute = z.number().int().min(0).max(59);
+const weekday = z.number().int().min(0).max(6);
+
+const weekDaySchedule = z
+  .object({ weekday, startHour: hour, startMinute: minute, stopHour: hour, stopMinute: minute })
+  .strict()
+  .refine((s) => s.stopHour * 60 + s.stopMinute > s.startHour * 60 + s.startMinute, 'stop time must be after the start time');
+
+const yearDaySchedule = z
+  .object({
+    startYear: z.number().int().min(0).max(99),
+    startMonth: z.number().int().min(1).max(12),
+    startDay: z.number().int().min(1).max(31),
+    startHour: hour,
+    startMinute: minute,
+    stopYear: z.number().int().min(0).max(99),
+    stopMonth: z.number().int().min(1).max(12),
+    stopDay: z.number().int().min(1).max(31),
+    stopHour: hour,
+    stopMinute: minute,
+  })
+  .strict()
+  .refine(
+    (s) =>
+      [s.stopYear, s.stopMonth, s.stopDay, s.stopHour, s.stopMinute].join(',') !== [s.startYear, s.startMonth, s.startDay, s.startHour, s.startMinute].join(',') &&
+      (s.stopYear - s.startYear || s.stopMonth - s.startMonth || s.stopDay - s.startDay || s.stopHour - s.startHour || s.stopMinute - s.startMinute) > 0,
+    'stop must be after the start',
+  );
+
+const dailyRepeatingSchedule = z
+  .object({
+    weekdays: z.array(weekday).min(1).max(7).refine((days) => new Set(days).size === days.length, 'must not repeat a weekday'),
+    startHour: hour,
+    startMinute: minute,
+    durationHour: hour,
+    durationMinute: minute,
+  })
+  .strict();
+
+/** `PUT /api/v1/locks/{nodeId}/users/{userId}/schedules/{kind}/{slotId}` body, by `kind`. */
+export const lockScheduleBodySchemas = {
+  weekDay: weekDaySchedule,
+  yearDay: yearDaySchedule,
+  dailyRepeating: dailyRepeatingSchedule,
+} as const;
