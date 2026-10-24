@@ -1,19 +1,22 @@
 import { Router } from 'express';
 import { ApiError } from '../app.js';
 import { asyncHandler } from '../async-handler.js';
-import { chimeBodySchema, validateBody } from '../validation.js';
+import { chimeBodySchema, keypadSettingsUpdateSchema, validateBody } from '../validation.js';
 import { requireAuth, requireRole } from '../../auth/authorize.js';
+import type { KeypadSettingsService, KeypadSettingsUpdate } from '../../keypads/keypad-settings.js';
 import { KeypadNotFoundError, KeypadUnsupportedError, type KeypadService } from '../../keypads/keypad-service.js';
 
 export interface KeypadRouteDeps {
   keypadService: KeypadService;
+  keypadSettings?: KeypadSettingsService;
 }
 
 /**
- * `GET /api/v1/keypads` and `POST /api/v1/keypads/{nodeId}/chime` (the keypad contract). Nothing
+ * `GET /api/v1/keypads`, `POST /api/v1/keypads/{nodeId}/chime` and `GET`/`PATCH /api/v1/keypad-settings`
+ * (the keypad contract). Nothing
  * here knows which keypad models exist: capabilities and chime sounds come from each keypad's adapter.
  */
-export function createKeypadRouter({ keypadService }: KeypadRouteDeps): Router {
+export function createKeypadRouter({ keypadService, keypadSettings }: KeypadRouteDeps): Router {
   const router = Router();
 
   router.get('/keypads', requireAuth, requireRole('administrator', 'member'), (_req, res) => {
@@ -46,6 +49,22 @@ export function createKeypadRouter({ keypadService }: KeypadRouteDeps): Router {
       res.status(204).end();
     }),
   );
+
+  if (keypadSettings) {
+    router.get('/keypad-settings', requireAuth, requireRole('administrator', 'member'), (_req, res) => {
+      res.status(200).json(keypadSettings.get());
+    });
+
+    router.patch(
+      '/keypad-settings',
+      requireAuth,
+      requireRole('administrator'),
+      validateBody(keypadSettingsUpdateSchema),
+      (req, res) => {
+        res.status(200).json(keypadSettings.update(req.body as KeypadSettingsUpdate));
+      },
+    );
+  }
 
   return router;
 }

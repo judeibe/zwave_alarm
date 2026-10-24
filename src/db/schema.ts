@@ -126,6 +126,17 @@ const MIGRATIONS: Migration[] = [
       CREATE UNIQUE INDEX idx_users_ha_person_id ON users(ha_person_id) WHERE ha_person_id IS NOT NULL;
     `,
   },
+  {
+    // Keypad behaviour an administrator can change at runtime. NULL means "not chosen yet": the
+    // service falls back to its KEYPAD_REQUIRE_CODE_TO_ARM environment default.
+    id: '005_keypad_settings',
+    sql: `
+      CREATE TABLE keypad_settings (
+        id TEXT PRIMARY KEY CHECK (id = 'settings'),
+        require_code_to_arm INTEGER CHECK (require_code_to_arm IN (0, 1))
+      );
+    `,
+  },
 ];
 
 function ensureMigrationsTable(db: Database.Database): void {

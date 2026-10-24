@@ -28,9 +28,23 @@ Z-Wave alarm keypads (the Ring Keypad v2 is the first). This service owns all Z-
 
 Body `{ "sound": "doorbell", "volume": 60 }`; `volume` is optional, an integer 0-99, defaulting to a per-keypad value. `404 not_found` if no keypad has that node id. `400 bad_request` if the body is malformed, the sound is not in that keypad's `chimeSounds`, or the keypad has no `chime` capability.
 
+### `GET /api/v1/keypad-settings` → `200`
+
+```json
+{ "requireCodeToArm": false }
+```
+
+Administrator or member. `requireCodeToArm`: whether arming from a keypad needs a valid user code (disarming always does). Until an administrator chooses a value it follows the `KEYPAD_REQUIRE_CODE_TO_ARM` environment variable.
+
+### `PATCH /api/v1/keypad-settings` → `200`
+
+Administrator only. Body `{ "requireCodeToArm": true }` (at least one field); responds with the resulting settings. The change applies to the next keypad request and is stored, so it survives a restart. `400 bad_request` for an empty or malformed body.
+
 ## WebSocket (`/api/v1/stream`)
 
 - `snapshot` carries an additional `"keypads": KeypadSummary[]`. Absent only when the server has no keypad support wired.
+- `snapshot` also carries `"keypadSettings": { "requireCodeToArm": boolean }`.
+- `keypad.settings`: `{ "type": "keypad.settings", "settings": { "requireCodeToArm": boolean } }` when the settings change.
 - `keypad.changed`: `{ "type": "keypad.changed", "keypad": KeypadSummary }` when a keypad is discovered or its connectivity or battery changes.
 - `keypad.event`: a button press. It **never carries the entered code**.
 
@@ -44,7 +58,7 @@ Body `{ "sound": "doorbell", "volume": 60 }`; `volume` is optional, an integer 0
 
 - `disarm` / `code_entered` with a valid user code disarms (a zone-restricted guest disarms only their zone; a locked account or expired guest code is refused like a wrong code). A wrong code plays the keypad's "code rejected" tone. A keypad sends only the code, never who typed it, so unlike `POST /panel/disarm` a wrong code cannot count toward any user's failed-attempt lockout.
 - `code_entered` while the panel is already disarmed does nothing.
-- `arm_away` / `arm_home` arm with the configured exit delay and need no code by default. Set `KEYPAD_REQUIRE_CODE_TO_ARM=true` to require a valid code.
+- `arm_away` / `arm_home` arm with the configured exit delay and need no code by default. Require a valid code with `PATCH /keypad-settings` (or set `KEYPAD_REQUIRE_CODE_TO_ARM=true` as the default).
 - `emergency` triggers the alarm immediately (`alarm_triggered`), recording which button was pressed.
 - Panel state is mirrored on every keypad that supports `indicators`: mode, exit delay, entry delay and alarm. A keypad that appears or comes back online shows the current state at once.
 
