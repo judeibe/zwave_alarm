@@ -97,6 +97,8 @@ const lockService = new LockService({
   setScheduleEnabled: (...args) => lockGateway.setScheduleEnabled(...args),
   setSchedule: (...args) => lockGateway.setSchedule(...args),
   getSchedule: (...args) => lockGateway.getSchedule(...args),
+  setLocked: (...args) => lockGateway.setLocked(...args),
+  getLocked: (...args) => lockGateway.getLocked(...args),
 }, new LockEnrollmentRepository(db));
 const lockGateway: ZwaveLockGateway = new ZwaveLockGateway(driver, lockService);
 // KEYPAD_REQUIRE_CODE_TO_ARM is only the default; an administrator's choice (PATCH /keypad-settings) wins.

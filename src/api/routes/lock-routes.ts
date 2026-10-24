@@ -1,12 +1,13 @@
 import { Router, type Request, type Response } from 'express';
 import { ApiError } from '../app.js';
 import { asyncHandler } from '../async-handler.js';
-import { lockScheduleBodySchemas, lockScheduleEnabledBodySchema, lockSettingsBodySchema, lockUserCodeBodySchema, validateBody } from '../validation.js';
+import { lockScheduleBodySchemas, lockScheduleEnabledBodySchema, lockSettingsBodySchema, lockStateBodySchema, lockUserCodeBodySchema, validateBody } from '../validation.js';
 import { requireAuth, requireRole } from '../../auth/authorize.js';
 import {
   LockCommunicationError,
   LockNotFoundError,
   LockNotSecureError,
+  LockScheduleKindUnsupportedError,
   LockUnsupportedError,
   SCHEDULE_KINDS,
   type LockService,
@@ -24,6 +25,9 @@ export interface LockRouteDeps {
 function toApiError(err: unknown): unknown {
   if (err instanceof LockNotFoundError) {
     return new ApiError(404, 'not_found', err.message);
+  }
+  if (err instanceof LockScheduleKindUnsupportedError) {
+    return new ApiError(400, 'schedule_kind_unsupported', err.message);
   }
   if (err instanceof LockValueError || err instanceof LockUnsupportedError) {
     return new ApiError(400, 'bad_request', err.message);
@@ -102,10 +106,8 @@ export function createLockRouter({ lockService }: LockRouteDeps): Router {
     '/locks/:nodeId/enrollment',
     ...guard,
     requireRole('administrator'),
-    lockHandler((nodeId, _req, res) => {
-      lockService.unenroll(nodeId);
-      res.status(204).end();
-      return Promise.resolve();
+    lockHandler(async (nodeId, _req, res) => {
+      res.status(200).json(await lockService.unenroll(nodeId));
     }),
   );
 
@@ -131,6 +133,15 @@ export function createLockRouter({ lockService }: LockRouteDeps): Router {
     validateBody(lockSettingsBodySchema),
     lockHandler(async (nodeId, req, res) => {
       res.status(200).json(await lockService.updateSettings(nodeId, req.body as SettingsChange));
+    }),
+  );
+
+  router.put(
+    '/locks/:nodeId/state',
+    ...guard,
+    validateBody(lockStateBodySchema),
+    lockHandler(async (nodeId, req, res) => {
+      res.status(200).json(await lockService.setLocked(nodeId, (req.body as { locked: boolean }).locked));
     }),
   );
 

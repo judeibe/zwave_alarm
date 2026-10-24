@@ -43,6 +43,8 @@ async function buildHarness() {
     setScheduleEnabled: vi.fn().mockResolvedValue(undefined),
     setSchedule: vi.fn().mockResolvedValue(undefined),
     getSchedule: vi.fn().mockResolvedValue({ weekday: 1, startHour: 8, startMinute: 0, stopHour: 17, stopMinute: 0 }),
+    setLocked: vi.fn().mockResolvedValue(undefined),
+    getLocked: vi.fn().mockResolvedValue(true),
   };
   const enrolled = new Set([5, 6]);
   const lockService = new LockService(port, {
@@ -276,7 +278,8 @@ describe('lock routes', () => {
     expect(enrolledRes.body).toMatchObject({ nodeId: 7, capabilities: { secure: true, userCodes: true } });
     expect((await admin.get('/api/v1/locks').expect(200)).body.locks).toHaveLength(3);
 
-    await admin.delete('/api/v1/locks/7/enrollment').expect(204);
+    const removed = await admin.delete('/api/v1/locks/7/enrollment').expect(200);
+    expect(removed.body).toEqual({ nodeId: 7, cleared: true, failures: [] });
     await admin.get('/api/v1/locks/7').expect(404);
     expect((await admin.get('/api/v1/locks/available').expect(200)).body.locks).toHaveLength(2);
   });
@@ -291,5 +294,40 @@ describe('lock routes', () => {
     await admin.put('/api/v1/locks/99/enrollment').expect(404);
     const res = await admin.put('/api/v1/locks/8/enrollment').expect(409);
     expect(res.body.error.code).toBe('lock_not_secure');
+  });
+
+  it('reports a failed clear when unenrolling, and still unenrolls', async () => {
+    const { app, userRepo, port } = await buildHarness();
+    const admin = await loginAs(app, userRepo, 'administrator', '1234');
+    port.clearUserCode.mockRejectedValue(new Error('no answer'));
+
+    const res = await admin.delete('/api/v1/locks/5/enrollment').expect(200);
+
+    expect(res.body.cleared).toBe(false);
+    expect(res.body.failures[0]).toContain('no answer');
+    await admin.get('/api/v1/locks/5').expect(404);
+  });
+
+  it('answers schedule_kind_unsupported for a kind the lock has no slots for', async () => {
+    const { app, userRepo, port } = await buildHarness();
+    const agent = await loginAs(app, userRepo, 'member', '1234');
+    port.getScheduleSlotCounts.mockResolvedValue({ weekDay: 7, yearDay: 0, dailyRepeating: 0 });
+    await agent.post('/api/v1/locks/5/refresh').expect(200);
+
+    const res = await agent.get('/api/v1/locks/5/users/1/schedules/yearDay/1').expect(400);
+
+    expect(res.body.error.code).toBe('schedule_kind_unsupported');
+  });
+
+  it('locks and unlocks, and validates the body', async () => {
+    const { app, userRepo, port } = await buildHarness();
+    const agent = await loginAs(app, userRepo, 'member', '1234');
+
+    const res = await agent.put('/api/v1/locks/5/state').send({ locked: false }).expect(200);
+
+    expect(res.body).toMatchObject({ nodeId: 5, locked: expect.anything() });
+    expect(port.setLocked).toHaveBeenCalledWith(5, false);
+    await agent.put('/api/v1/locks/5/state').send({ locked: 'yes' }).expect(400);
+    await agent.put('/api/v1/locks/7/state').send({ locked: true }).expect(404);
   });
 });

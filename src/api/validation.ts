@@ -195,6 +195,9 @@ export const lockUserCodeBodySchema = z.object({
   status: z.enum(['enabled', 'disabled']).optional(),
 });
 
+/** `PUT /api/v1/locks/{nodeId}/state` body: `true` throws the bolt, `false` retracts it. */
+export const lockStateBodySchema = z.object({ locked: z.boolean() });
+
 /** `PUT /api/v1/locks/{nodeId}/users/{userId}/schedules/enabled` body. */
 export const lockScheduleEnabledBodySchema = z.object({ enabled: z.boolean() });
 

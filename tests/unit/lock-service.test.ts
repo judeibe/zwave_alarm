@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { LockCommunicationError, LockNotFoundError, LockNotSecureError, LockService, LockUnsupportedError, type LockEnrollmentStore, type LockPort } from '../../src/locks/lock-service.js';
+import { LockCommunicationError, LockNotFoundError, LockNotSecureError, LockScheduleKindUnsupportedError, LockService, LockUnsupportedError, type LockEnrollmentStore, type LockPort } from '../../src/locks/lock-service.js';
 import { LockValueError } from '../../src/locks/schlage.js';
 
 const BE469 = { model: 'BE469', label: 'Schlage BE469' } as const;
@@ -19,6 +19,8 @@ function buildPort(raw: Record<number, number> = {}) {
     setScheduleEnabled: vi.fn().mockResolvedValue(undefined),
     setSchedule: vi.fn().mockResolvedValue(undefined),
     getSchedule: vi.fn().mockResolvedValue(undefined),
+    setLocked: vi.fn().mockResolvedValue(undefined),
+    getLocked: vi.fn().mockResolvedValue(true),
   };
   return port satisfies LockPort;
 }
@@ -250,19 +252,59 @@ describe('LockService', () => {
       expect(service.list().map((lock) => lock.nodeId)).toEqual([5, 6]);
     });
 
-    it('unenrolls a lock, announcing the removal, and sends it back to available', () => {
+    it('unenrolls a lock, announcing the removal, and sends it back to available', async () => {
       const removed = vi.fn();
       service.on('lock_removed', removed);
 
-      service.unenroll(5);
-      service.unenroll(5);
+      await expect(service.unenroll(5)).resolves.toEqual({ nodeId: 5, cleared: true, failures: [] });
+      await expect(service.unenroll(5)).resolves.toEqual({ nodeId: 5, cleared: true, failures: [] });
 
       expect(removed).toHaveBeenCalledTimes(1);
       expect(removed).toHaveBeenCalledWith(5);
       expect(service.list().map((lock) => lock.nodeId)).toEqual([6]);
       expect(service.listAvailable().map((lock) => lock.nodeId)).toEqual([5]);
       expect(() => service.get(5)).toThrow(LockNotFoundError);
-      expect(() => service.unenroll(99)).toThrow(LockNotFoundError);
+      await expect(service.unenroll(99)).rejects.toBeInstanceOf(LockNotFoundError);
+    });
+
+    it('clears the schedules and code of every occupied user before unenrolling', async () => {
+      raw[6] = 0x05_00_00_00; // slots 1 and 3
+      port.getScheduleSlotCounts.mockResolvedValue({ weekDay: 2, yearDay: 0, dailyRepeating: 1 });
+
+      const result = await service.unenroll(5);
+
+      expect(result.cleared).toBe(true);
+      expect(port.clearUserCode.mock.calls).toEqual([[5, 1], [5, 3]]);
+      expect(port.setSchedule).toHaveBeenCalledTimes(6);
+      expect(port.setSchedule).toHaveBeenCalledWith(5, 'weekDay', 3, 2, undefined);
+      expect(port.setSchedule).toHaveBeenCalledWith(5, 'dailyRepeating', 1, 1, undefined);
+      expect(port.setSchedule).not.toHaveBeenCalledWith(5, 'yearDay', expect.anything(), expect.anything(), undefined);
+      expect(service.isEnrolled(5)).toBe(false);
+    });
+
+    it('still unenrolls an unreachable lock, reporting that nothing was cleared and giving up at once', async () => {
+      port.setSchedule.mockRejectedValue(new Error('timeout'));
+      port.clearUserCode.mockRejectedValue(new Error('timeout'));
+      const removed = vi.fn();
+      service.on('lock_removed', removed);
+
+      const result = await service.unenroll(5);
+
+      expect(result.cleared).toBe(false);
+      expect(result.failures).toHaveLength(1);
+      expect(result.failures[0]).toContain('timeout');
+      expect(removed).toHaveBeenCalledOnce();
+      expect(service.isEnrolled(5)).toBe(false);
+    });
+
+    it('carries on past a later failure and lists every failed step', async () => {
+      raw[6] = 0x03_00_00_00; // slots 1 and 2
+      port.getScheduleSlotCounts.mockResolvedValue({ weekDay: 0, yearDay: 0, dailyRepeating: 0 });
+      port.clearUserCode.mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error('rejected'));
+
+      const result = await service.unenroll(5);
+
+      expect(result).toMatchObject({ cleared: false, failures: ['user code 2: rejected'] });
     });
 
     it('drops the enrollment of a lock that leaves the network', () => {
@@ -294,13 +336,50 @@ describe('LockService', () => {
       expect(service.get(6).capabilities.alarmSettings).toBe(false);
     });
 
-    it('rejects a schedule kind the lock has no slots for', async () => {
+    it('rejects a schedule kind the lock has no slots for with a distinct error', async () => {
       port.getScheduleSlotCounts.mockResolvedValue({ weekDay: 7, yearDay: 0, dailyRepeating: 0 });
       await service.refresh(5);
 
-      await expect(service.getSchedule(5, 'yearDay', 1, 1)).rejects.toBeInstanceOf(LockUnsupportedError);
+      await expect(service.getSchedule(5, 'yearDay', 1, 1)).rejects.toBeInstanceOf(LockScheduleKindUnsupportedError);
       await expect(service.clearSchedule(5, 'dailyRepeating', 1, 1)).rejects.toBeInstanceOf(LockUnsupportedError);
       expect(port.setSchedule).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('lock state', () => {
+    it('reads the state on refresh and follows what the lock reports', async () => {
+      const changed = vi.fn();
+      await service.refresh(5);
+      expect(service.get(5).locked).toBe(true);
+      service.on('lock_changed', changed);
+
+      service.recordLocked(5, false);
+      service.recordLocked(5, false);
+
+      expect(service.get(5).locked).toBe(false);
+      expect(changed).toHaveBeenCalledTimes(1);
+      expect(changed).toHaveBeenCalledWith(expect.objectContaining({ nodeId: 5, locked: false }));
+    });
+
+    it('locks and unlocks through the port, and wraps a failure', async () => {
+      await service.setLocked(5, false);
+      await service.setLocked(5, true);
+      expect(port.setLocked.mock.calls).toEqual([[5, false], [5, true]]);
+
+      port.setLocked.mockRejectedValueOnce(new Error('jammed'));
+      await expect(service.setLocked(5, true)).rejects.toBeInstanceOf(LockCommunicationError);
+      service.add(7, BE469);
+      await expect(service.setLocked(7, true)).rejects.toBeInstanceOf(LockNotFoundError);
+    });
+
+    it('does not announce the state of a lock that is not enrolled', () => {
+      const changed = vi.fn();
+      service.on('lock_changed', changed);
+      service.add(7, BE469);
+
+      service.recordLocked(7, true);
+
+      expect(changed).not.toHaveBeenCalled();
     });
   });
 });

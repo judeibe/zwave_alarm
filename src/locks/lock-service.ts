@@ -86,6 +86,10 @@ export interface LockPort {
   setScheduleEnabled(nodeId: number, userId: number, enabled: boolean): Promise<void>;
   setSchedule<K extends ScheduleKind>(nodeId: number, kind: K, userId: number, slotId: number, schedule: ScheduleByKind[K] | undefined): Promise<void>;
   getSchedule<K extends ScheduleKind>(nodeId: number, kind: K, userId: number, slotId: number): Promise<ScheduleByKind[K] | undefined>;
+  /** Door Lock CC: throw (`true`) or retract (`false`) the bolt. */
+  setLocked(nodeId: number, locked: boolean): Promise<void>;
+  /** Door Lock CC: whether the bolt is thrown, `undefined` when the lock does not say. */
+  getLocked(nodeId: number): Promise<boolean | undefined>;
 }
 
 /** The read/write parameters of a lock, by API key. `null` is "not read yet" or "this model has none". */
@@ -165,6 +169,8 @@ export interface LockSummary {
   /** Schedule slots per user; `null` until the lock has answered. */
   scheduleSlots: ScheduleSlotCounts | null;
   userSlotCount: number;
+  /** Whether the bolt is thrown; `null` until the lock has reported it, or while it says unknown. */
+  locked: boolean | null;
   capabilities: LockCapabilities;
 }
 
@@ -197,11 +203,20 @@ class MemoryEnrollmentStore implements LockEnrollmentStore {
   }
 }
 
+/** What was left on a lock when it was unenrolled. `failures` is empty when everything was cleared. */
+export interface UnenrollResult {
+  nodeId: number;
+  cleared: boolean;
+  failures: string[];
+}
+
 export class LockNotFoundError extends Error {}
 /** The lock exists but cannot do what was asked (a BE469-only setting on a BE468). */
 export class LockUnsupportedError extends Error {}
 /** The lock was not included securely (S0/S2), so user codes and schedules cannot work; it cannot be enrolled. */
 export class LockNotSecureError extends Error {}
+/** A schedule kind the lock reports no slots for (some firmware has no week-day, year-day or daily-repeating schedules). */
+export class LockScheduleKindUnsupportedError extends LockUnsupportedError {}
 /** The lock did not answer, or rejected a write. */
 export class LockCommunicationError extends Error {}
 
@@ -211,6 +226,7 @@ interface LockEntry {
   connectivityStatus: ConnectivityStatus;
   batteryLevel: number | null;
   secure: boolean | null;
+  locked: boolean | null;
   raw: Map<string, number>;
   scheduleSlots: ScheduleSlotCounts | null;
 }
@@ -250,6 +266,7 @@ export class LockService extends EventEmitter {
       connectivityStatus: initial.connectivityStatus ?? 'online',
       batteryLevel: initial.batteryLevel ?? null,
       secure: initial.secure ?? null,
+      locked: null,
       raw: new Map(),
       scheduleSlots: null,
     };
@@ -296,17 +313,64 @@ export class LockService extends EventEmitter {
     return this.refresh(nodeId);
   }
 
-  /** Takes a lock out of the alarm system. Works for a lock that has also left the network. Idempotent. */
-  unenroll(nodeId: number): void {
-    if (!this.enrollment.isEnrolled(nodeId)) {
-      if (!this.locks.has(nodeId)) {
-        throw new LockNotFoundError(`No lock with node id ${String(nodeId)}`);
-      }
-      return;
+  /**
+   * Takes a lock out of the alarm system, first clearing every user code and schedule on it so the
+   * codes do not keep working unmanaged. The lock is unenrolled even when it cannot be cleared (it is
+   * offline, say): `cleared` is then `false` and `failures` says what is left on the lock. Idempotent;
+   * a lock that is not enrolled has nothing to clear.
+   */
+  async unenroll(nodeId: number): Promise<UnenrollResult> {
+    if (!this.locks.has(nodeId) && !this.enrollment.isEnrolled(nodeId)) {
+      throw new LockNotFoundError(`No lock with node id ${String(nodeId)}`);
     }
+    if (!this.isEnrolled(nodeId)) {
+      this.enrollment.unenroll(nodeId);
+      return { nodeId, cleared: true, failures: [] };
+    }
+    const failures = await this.clearLock(nodeId);
     this.enrollment.unenroll(nodeId);
-    logger.info('lock unenrolled', { nodeId });
+    logger.info('lock unenrolled', { nodeId, cleared: failures.length === 0 });
     this.emit('lock_removed', nodeId);
+    return { nodeId, cleared: failures.length === 0, failures };
+  }
+
+  /**
+   * Clears the schedules and then the code of every occupied user slot (every slot when the occupied
+   * ones are unknown). A first step that fails means the lock is unreachable, so the rest is skipped
+   * rather than waiting out a timeout per slot; later failures are collected and the clearing goes on.
+   */
+  private async clearLock(nodeId: number): Promise<string[]> {
+    const entry = this.entry(nodeId);
+    await this.readInto(nodeId, entry, requiredDefinition('userSlotBitField'));
+    const slots = await this.scheduleSlots(nodeId).catch(() => null);
+    const users = this.occupied(entry) ?? Array.from({ length: USER_SLOT_COUNT }, (_, index) => index + 1);
+
+    const failures: string[] = [];
+    let attempted = 0;
+    const step = async (what: string, run: () => Promise<void>): Promise<boolean> => {
+      try {
+        await run();
+        attempted++;
+        return true;
+      } catch (err) {
+        failures.push(`${what}: ${errorMessage(err)}`);
+        return attempted > 0;
+      }
+    };
+
+    for (const userId of users) {
+      for (const kind of SCHEDULE_KINDS) {
+        for (let slotId = 1; slotId <= (slots?.[kind] ?? 0); slotId++) {
+          if (!(await step(`${kind} schedule ${String(userId)}/${String(slotId)}`, () => this.port.setSchedule(nodeId, kind, userId, slotId, undefined)))) {
+            return failures;
+          }
+        }
+      }
+      if (!(await step(`user code ${String(userId)}`, () => this.port.clearUserCode(nodeId, userId)))) {
+        return failures;
+      }
+    }
+    return failures;
   }
 
   /** The node left the Z-Wave network: forget it and, if it was enrolled, drop the enrollment too. */
@@ -337,6 +401,26 @@ export class LockService extends EventEmitter {
     this.publish(nodeId, entry);
   }
 
+  /**
+   * Throws or retracts the bolt. The lock moves after it answers, so the returned summary may still
+   * show the old state; the new one arrives as a `lock_changed` when the lock reports it.
+   */
+  async setLocked(nodeId: number, locked: boolean): Promise<LockSummary> {
+    const entry = this.entry(nodeId);
+    await this.communicate(locked ? 'Locking' : 'Unlocking', () => this.port.setLocked(nodeId, locked));
+    return this.summarize(nodeId, entry);
+  }
+
+  /** Records the bolt state the lock reported (a Door Lock report or an Access Control notification). */
+  recordLocked(nodeId: number, locked: boolean | null): void {
+    const entry = this.locks.get(nodeId);
+    if (!entry || entry.locked === locked) {
+      return;
+    }
+    entry.locked = locked;
+    this.publish(nodeId, entry);
+  }
+
   /** Records a parameter value the lock reported unprompted (a Configuration Report), so clients see it without a poll. */
   recordReport(nodeId: number, parameter: number, raw: number): void {
     const entry = this.locks.get(nodeId);
@@ -361,6 +445,11 @@ export class LockService extends EventEmitter {
       entry.scheduleSlots = (await this.port.getScheduleSlotCounts(nodeId)) ?? entry.scheduleSlots;
     } catch (err) {
       logger.warn('reading schedule slot counts failed', { nodeId, error: errorMessage(err) });
+    }
+    try {
+      entry.locked = (await this.port.getLocked(nodeId)) ?? entry.locked;
+    } catch (err) {
+      logger.warn('reading the lock state failed', { nodeId, error: errorMessage(err) });
     }
     return this.publish(nodeId, entry);
   }
@@ -466,7 +555,7 @@ export class LockService extends EventEmitter {
     assertUserId(userId);
     const count = entry.scheduleSlots?.[kind] ?? MAX_SCHEDULE_SLOT;
     if (count === 0) {
-      throw new LockUnsupportedError(`The ${entry.model} does not support ${kind} schedules`);
+      throw new LockScheduleKindUnsupportedError(`This lock does not support ${kind} schedules`);
     }
     if (!Number.isInteger(slotId) || slotId < 1 || slotId > count) {
       throw new LockValueError(`${kind} slot must be an integer from 1 to ${String(count)}`);
@@ -570,6 +659,7 @@ export class LockService extends EventEmitter {
       },
       scheduleSlots: entry.scheduleSlots,
       userSlotCount: USER_SLOT_COUNT,
+      locked: entry.locked,
       capabilities: {
         secure: entry.secure,
         userCodes: true,

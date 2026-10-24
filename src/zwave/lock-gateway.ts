@@ -1,9 +1,9 @@
 import type { Driver, ZWaveNode } from 'zwave-js';
-import { NodeStatus, UserIDStatus } from 'zwave-js';
+import { DoorLockMode, NodeStatus, UserIDStatus } from 'zwave-js';
 import { CommandClasses, ConfigValueFormat, isUnsupervisedOrSucceeded, type SupervisionResult } from '@zwave-js/core';
 import { createLogger } from '../config/logger.js';
 import { LockService, type LockPort, type ScheduleByKind, type ScheduleKind, type ScheduleSlotCounts, type UserCodeStatus, type UserSlot } from '../locks/lock-service.js';
-import { SCHLAGE_PARAMETERS, identifySchlageLock } from '../locks/schlage.js';
+import { SCHLAGE_PARAMETERS, identifySchlageLock, lockedFromAccessControlEvent, lockedFromDoorLockMode } from '../locks/schlage.js';
 
 const logger = createLogger('zwave/lock-gateway');
 
@@ -120,6 +120,16 @@ export class ZwaveLockGateway implements LockPort {
     return schedule as ScheduleByKind[K] | undefined;
   }
 
+  async setLocked(nodeId: number, locked: boolean): Promise<void> {
+    const result = await this.node(nodeId).commandClasses['Door Lock'].set(locked ? DoorLockMode.Secured : DoorLockMode.Unsecured);
+    assertAccepted(result, locked ? 'locking' : 'unlocking');
+  }
+
+  async getLocked(nodeId: number): Promise<boolean | undefined> {
+    const report = await this.node(nodeId).commandClasses['Door Lock'].get();
+    return report && (lockedFromDoorLockMode(report.currentMode) ?? undefined);
+  }
+
   private node(nodeId: number): ZWaveNode {
     const node = this.driver.controller.nodes.get(nodeId);
     if (!node) {
@@ -159,9 +169,18 @@ export class ZwaveLockGateway implements LockPort {
       if (args.commandClass === CommandClasses.Battery && args.property === 'level') {
         const raw = args.newValue as unknown;
         this.locks.updateStatus(n.id, { batteryLevel: typeof raw === 'number' ? raw : raw === 'low' ? LOW_BATTERY_LEVEL : null });
+      } else if (args.commandClass === CommandClasses['Door Lock'] && args.property === 'currentMode' && typeof args.newValue === 'number') {
+        this.locks.recordLocked(n.id, lockedFromDoorLockMode(args.newValue));
       } else if (args.commandClass === CommandClasses.Configuration && typeof args.property === 'number' && typeof args.newValue === 'number') {
         const size = SCHLAGE_PARAMETERS.find((definition) => definition.parameter === args.property)?.size ?? 1;
         this.locks.recordReport(n.id, args.property, args.newValue < 0 ? args.newValue + 2 ** (8 * size) : args.newValue);
+      }
+    });
+    // The keypad, thumb-turn and auto-lock report the bolt as Access Control notifications.
+    node.on('notification', (endpoint, ccId, args) => {
+      const locked = ccId === CommandClasses.Notification && (args as { type?: number }).type === 0x06 ? lockedFromAccessControlEvent((args as { event: number }).event) : undefined;
+      if (locked !== undefined) {
+        this.locks.recordLocked(endpoint.nodeId, locked);
       }
     });
     node.on('dead', (n) => this.locks.updateStatus(n.id, { connectivityStatus: 'offline' }));

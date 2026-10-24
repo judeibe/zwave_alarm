@@ -8,7 +8,19 @@ A recognised Schlage node is only **paired**. It becomes part of the alarm syste
 
 Enrolling a lock known to be included without S0/S2 security is refused with `409 lock_not_secure` (its user codes and schedules could not be managed): exclude it and include it again with S0 or S2. Same authentication as the rest of the API (session cookie or Home Assistant bearer token; `administrator`/`member` roles). No endpoint ever returns a stored user code.
 
-Errors use the standard `{ "error": { "code", "message" } }` shape: `400 bad_request` (invalid value, a BE469-only setting on a BE468, or a schedule kind the lock has no slots for), `404 not_found` (unknown or not enrolled lock, or unknown schedule kind), `409 lock_not_secure` (enrolling a lock without S0/S2), `502 lock_unavailable` (the lock did not answer or rejected a write).
+Errors use the standard `{ "error": { "code", "message" } }` shape: `400 bad_request` (invalid value or a BE469-only setting on a BE468), `400 schedule_kind_unsupported` (a schedule kind the lock reports no slots for), `404 not_found` (unknown or not enrolled lock, or unknown schedule kind), `409 lock_not_secure` (enrolling a lock without S0/S2), `502 lock_unavailable` (the lock did not answer or rejected a write).
+
+### Unenrolling
+
+`DELETE /locks/{nodeId}/enrollment` first clears the lock: for every occupied user slot (all 30 when the occupied ones cannot be read) it deletes the schedules of each kind the lock has slots for, then the user code. Then it removes the enrollment and sends `lock.removed`. The enrollment is **always** removed, even if the lock cannot be cleared, so an offline or broken lock can still be taken out of the alarm system. The response says what happened:
+
+```json
+{ "nodeId": 5, "cleared": false, "failures": ["weekDay schedule 1/1: the lock did not answer"] }
+```
+
+`cleared` is `true` and `failures` empty when everything was cleared. When the very first step fails the lock is taken to be unreachable and the rest is skipped (one entry in `failures`), rather than waiting out a timeout per slot. A later failure is recorded and clearing continues. When `cleared` is `false`, codes may still work on the lock: a client should tell the user to clear them at the lock, or enroll the lock again and delete them. The call is idempotent: unenrolling a lock that is not enrolled does nothing and returns `cleared: true`. A lock that has left the Z-Wave network cannot be cleared; it is simply dropped (`lock.removed`).
+
+Schedules of a user slot that holds no code are not cleared.
 
 ## `LockSummary`
 
@@ -31,6 +43,7 @@ Errors use the standard `{ "error": { "code", "message" } }` shape: `400 bad_req
   },
   "scheduleSlots": { "weekDay": 7, "yearDay": 7, "dailyRepeating": 7 },
   "userSlotCount": 30,
+  "locked": true,
   "capabilities": {
     "secure": true,
     "userCodes": true,
@@ -39,6 +52,8 @@ Errors use the standard `{ "error": { "code", "message" } }` shape: `400 bad_req
   }
 }
 ```
+
+`locked` is `true` when the bolt is thrown, `false` when it is retracted, and `null` until the lock has reported it or while it reports unknown. It comes from the Door Lock CC and from Access Control notifications (keypad, thumb-turn, RF and auto-lock events), so it also follows a person using the door.
 
 ### Capabilities
 
@@ -52,6 +67,18 @@ Errors use the standard `{ "error": { "code", "message" } }` shape: `400 bad_req
 | `alarmSettings` | The BE469-only alarm settings exist (`true` for BE469/BE469ZP, `false` for BE468). Same as `supportedSettings` containing `alarmMode`. |
 
 Any value is `null` until the lock has reported it, and the BE469-only settings (`alarmMode`, `alertSensitivity`, `tamperSensitivity`, `kickSensitivity`, `localControls`) are always `null` on a BE468 and absent from its `supportedSettings`. Clients should create entities from `supportedSettings`.
+
+### BE469ZP notes
+
+The BE469ZP is the Z-Wave Plus BE469: manufacturer `0x003B`, product type `0x0001`, product id `0x0469`, with the same parameters as the BE469 (the zwave-js device database, which has no firmware-specific differences for it, lists the same parameters 3-18).
+
+| Quirk | How the service handles it |
+| --- | --- |
+| 30 user codes, 4-8 digit PINs of one configured length | `userSlotCount: 30`; codes are validated against `pinLength` once it is known. |
+| Needs S0 or S2 for User Code and Schedule Entry Lock | `capabilities.secure` comes from the controller; a lock known to be insecure is refused at enrollment (`409 lock_not_secure`), an unknown one (`null`) may be enrolled. |
+| Supported schedule kinds and slot counts vary by firmware and are not documented per version | Not hard-coded: the Schedule Entry Lock `Supported Get` counts decide `scheduleSlots` and `capabilities.schedules`. A kind with zero slots is `400 schedule_kind_unsupported`. We could not find a source naming which firmware lacks week-day or year-day schedules, so treat `capabilities.schedules` as the truth. |
+| Does not accept all commands with Supervision, and may take many seconds to answer | zwave-js disables Supervision for it, so writes are unsupervised and treated as accepted when no rejection comes; a write that goes unanswered is `502 lock_unavailable`. Clients should allow a long timeout (10 s or more per call). |
+| `lockAndLeave`, `autoLock`, `beeper`, `vacationMode` are 0x00/0xFF | Encoded as booleans. |
 
 ## Parameter map
 
@@ -79,7 +106,8 @@ Any value is `null` until the lock has reported it, and the BE469-only settings 
 | `GET /api/v1/locks` | The enrolled locks. `200 { "locks": LockSummary[] }` |
 | `GET /api/v1/locks/available` | Administrator only. Paired locks not yet enrolled. `200 { "locks": [ { "nodeId", "model", "label", "connectivityStatus", "secure": boolean \| null } ] }` |
 | `PUT /api/v1/locks/{nodeId}/enrollment` | Administrator only. Adds the lock to the alarm system and reads its state. Idempotent. `200 LockSummary`; `404` unknown node; `409 lock_not_secure` |
-| `DELETE /api/v1/locks/{nodeId}/enrollment` | Administrator only. Removes the lock from the alarm system. Idempotent. `204`; `404` unknown node |
+| `DELETE /api/v1/locks/{nodeId}/enrollment` | Administrator only. Clears every user code and schedule on the lock, then removes it from the alarm system. `200 UnenrollResult`; `404` unknown node. See below |
+| `PUT /api/v1/locks/{nodeId}/state` | Body `{ "locked": boolean }`: `true` throws the bolt, `false` retracts it. `200 LockSummary`; `502 lock_unavailable` if the lock does not accept it |
 | `GET /api/v1/locks/{nodeId}` | `200 LockSummary` |
 | `POST /api/v1/locks/{nodeId}/refresh` | Re-reads every parameter and the schedule slot counts from the lock. `200 LockSummary` |
 | `PATCH /api/v1/locks/{nodeId}/settings` | Body: any non-empty subset of the writable `settings`. Validated as a whole before anything is written. `200 LockSummary` |

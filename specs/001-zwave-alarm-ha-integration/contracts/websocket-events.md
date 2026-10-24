@@ -58,7 +58,7 @@ Read-only channel for state; all commands (arm/disarm/config changes) go through
 { "type": "lock.changed", "lock": { /* LockSummary */ } }
 ```
 
-Sent when an **enrolled** Schlage lock appears or any of its state changes. See `contracts/locks.md`.
+Sent when an **enrolled** Schlage lock appears or any of its state changes. That includes the bolt moving (`locked` in the `LockSummary`). See `contracts/locks.md`.
 
 ### `lock.removed`
 
