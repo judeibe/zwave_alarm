@@ -30,6 +30,7 @@ const entryControl = (eventType: number, eventData?: string) => ({
 });
 
 function build(options: { requireCodeToArm?: boolean } = {}) {
+  const setting = { requireCodeToArm: options.requireCodeToArm ?? false };
   const db = createDatabase(':memory:');
   const eventRepo = new EventRepository(db);
   const zoneRepo = new ZoneRepository(db);
@@ -47,12 +48,12 @@ function build(options: { requireCodeToArm?: boolean } = {}) {
   });
   keypads.add(NODE, ringKeypadV2Adapter);
   new KeypadController(keypads, panelService, userRepo, lockoutService, eventRepo, zoneRepo, {
-    requireCodeToArm: options.requireCodeToArm ?? false,
+    requireCodeToArm: () => setting.requireCodeToArm,
   }).start();
   writes.length = 0; // drop the sync-on-add indication; tests look at what happens afterwards
 
   const wrote = (...expected: unknown[]) => writes.some((entry) => JSON.stringify(entry.writes) === JSON.stringify(expected));
-  return { panelService, keypads, userRepo, zoneRepo, eventRepo, writes, wrote };
+  return { panelService, keypads, userRepo, zoneRepo, eventRepo, writes, wrote, setting };
 }
 
 /** `arm()` resolves once the exit delay has started, so wait for the armed mode to actually be committed. */
@@ -180,6 +181,20 @@ describe('KeypadController', () => {
       expect(panelService.getState().mode).toBe('disarmed');
 
       keypads.receive(NODE, entryControl(5, '1234'));
+      await vi.waitFor(() => expect(panelService.getState().mode).toBe('armed_away'));
+    });
+
+    it('applies a change to the setting without a restart', async () => {
+      const { panelService, keypads, userRepo, setting } = build();
+      userRepo.create({ name: 'Ada', role: 'administrator', code: '1234' });
+      setting.requireCodeToArm = true;
+
+      keypads.receive(NODE, entryControl(5));
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(panelService.getState().mode).toBe('disarmed');
+
+      setting.requireCodeToArm = false;
+      keypads.receive(NODE, entryControl(5));
       await vi.waitFor(() => expect(panelService.getState().mode).toBe('armed_away'));
     });
 

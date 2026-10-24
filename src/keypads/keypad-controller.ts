@@ -12,8 +12,8 @@ import type { KeypadInputEvent, KeypadService, KeypadSummary } from './keypad-se
 const logger = createLogger('keypads/controller');
 
 export interface KeypadControllerOptions {
-  /** When true, arming from a keypad needs a valid user code too (KEYPAD_REQUIRE_CODE_TO_ARM). */
-  requireCodeToArm: boolean;
+  /** Read on every arm: when true, arming from a keypad needs a valid user code too. */
+  requireCodeToArm: () => boolean;
   /** Clock, injectable so the delay countdown is testable. */
   now?: () => number;
 }
@@ -85,7 +85,7 @@ export class KeypadController {
 
   private async arm(nodeId: number, mode: 'armed_away' | 'armed_home', code: string | undefined): Promise<void> {
     let user: User | undefined;
-    if (this.options.requireCodeToArm) {
+    if (this.options.requireCodeToArm()) {
       user = this.authenticate(code);
       if (!user) {
         await this.reject(nodeId, 'arm');

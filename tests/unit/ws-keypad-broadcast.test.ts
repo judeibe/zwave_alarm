@@ -9,6 +9,7 @@ import { EventRepository } from '../../src/events/event-repository.js';
 import { ZoneRepository } from '../../src/db/repositories/zone-repository.js';
 import { PanelService } from '../../src/alarm/panel-service.js';
 import type { SensorMapper } from '../../src/zwave/sensor-mapper.js';
+import { KeypadSettingsRepository, KeypadSettingsService } from '../../src/keypads/keypad-settings.js';
 import { KeypadService } from '../../src/keypads/keypad-service.js';
 import { ringKeypadV2Adapter } from '../../src/keypads/adapters/ring-keypad-v2.adapter.js';
 import { createWebSocketServer } from '../../src/api/ws.js';
@@ -38,7 +39,8 @@ function buildHarness() {
   keypadService.add(12, ringKeypadV2Adapter);
   // The broadcaster only subscribes to the mapper's events, which keypads never emit.
   const sensorMapper = new EventEmitter() as unknown as SensorMapper;
-  return { panelService, keypadService, eventRepo, zoneRepo, sensorMapper };
+  const keypadSettings = new KeypadSettingsService(new KeypadSettingsRepository(db), { requireCodeToArm: false });
+  return { panelService, keypadService, keypadSettings, eventRepo, zoneRepo, sensorMapper };
 }
 
 describe('keypad websocket events', () => {
@@ -54,7 +56,7 @@ describe('keypad websocket events', () => {
 
   async function connect(harness: ReturnType<typeof buildHarness>) {
     wss = createWebSocketServer({ port: 0 }, () =>
-      buildLiveSnapshot({ panelService: harness.panelService, zoneRepo: harness.zoneRepo, keypadService: harness.keypadService }),
+      buildLiveSnapshot({ panelService: harness.panelService, zoneRepo: harness.zoneRepo, keypadService: harness.keypadService, keypadSettings: harness.keypadSettings }),
     );
     attachWsBroadcaster(wss, harness);
     await once(wss, 'listening');
@@ -97,6 +99,17 @@ describe('keypad websocket events', () => {
     const message = await nextMessage(1);
     expect(message).toEqual({ type: 'keypad.event', nodeId: 12, adapterId: 'ring-keypad-v2', input: { kind: 'code_entered' } });
     expect(JSON.stringify(message)).not.toContain('1234');
+  });
+
+  it('includes the keypad settings in the snapshot and pushes keypad.settings when they change', async () => {
+    const harness = buildHarness();
+    const nextMessage = await connect(harness);
+
+    expect(await nextMessage(0)).toMatchObject({ keypadSettings: { requireCodeToArm: false } });
+
+    harness.keypadSettings.update({ requireCodeToArm: true });
+
+    expect(await nextMessage(1)).toEqual({ type: 'keypad.settings', settings: { requireCodeToArm: true } });
   });
 
   it('leaves the snapshot without keypads when no keypad service is wired', async () => {

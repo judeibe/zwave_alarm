@@ -11,6 +11,7 @@ import { SensorRepository } from '../../src/db/repositories/sensor-repository.js
 import { UserRepository } from '../../src/auth/user-repository.js';
 import { LockoutPolicyRepository } from '../../src/auth/lockout-policy-repository.js';
 import { LockoutService } from '../../src/auth/lockout-service.js';
+import { KeypadSettingsRepository, KeypadSettingsService } from '../../src/keypads/keypad-settings.js';
 import { KeypadService } from '../../src/keypads/keypad-service.js';
 import { ringKeypadV2Adapter } from '../../src/keypads/adapters/ring-keypad-v2.adapter.js';
 import { acmePadAdapter } from './fixtures/keypad-adapters/acme-pad.adapter.js';
@@ -47,6 +48,7 @@ async function buildHarness() {
     eventRepo,
     haLinkRepo: new HaLinkRepository(db),
     keypadService,
+    keypadSettings: new KeypadSettingsService(new KeypadSettingsRepository(db), { requireCodeToArm: false }),
     driver: { controller: { nodes: new Map() } } as unknown as Driver,
   });
   return { app, userRepo, writer };
@@ -99,6 +101,43 @@ describe('keypad routes', () => {
 
       const guest = await loginAs(app, userRepo, 'guest', '9999');
       await guest.get('/api/v1/keypads').expect(403);
+    });
+  });
+
+  describe('/api/v1/keypad-settings', () => {
+    it('reports the default to a member', async () => {
+      const { app, userRepo } = await buildHarness();
+      const agent = await loginAs(app, userRepo, 'member', '1234');
+
+      const res = await agent.get('/api/v1/keypad-settings').expect(200);
+
+      expect(res.body).toEqual({ requireCodeToArm: false });
+    });
+
+    it('lets an administrator change it, and the change sticks', async () => {
+      const { app, userRepo } = await buildHarness();
+      const agent = await loginAs(app, userRepo, 'administrator', '1234');
+
+      const patched = await agent.patch('/api/v1/keypad-settings').send({ requireCodeToArm: true }).expect(200);
+      const read = await agent.get('/api/v1/keypad-settings').expect(200);
+
+      expect(patched.body).toEqual({ requireCodeToArm: true });
+      expect(read.body).toEqual({ requireCodeToArm: true });
+    });
+
+    it('refuses a member changing it, and rejects an empty or malformed body', async () => {
+      const { app, userRepo } = await buildHarness();
+      const member = await loginAs(app, userRepo, 'member', '1234');
+      await member.patch('/api/v1/keypad-settings').send({ requireCodeToArm: true }).expect(403);
+
+      const admin = await loginAs(app, userRepo, 'administrator', '5678');
+      await admin.patch('/api/v1/keypad-settings').send({}).expect(400);
+      await admin.patch('/api/v1/keypad-settings').send({ requireCodeToArm: 'yes' }).expect(400);
+    });
+
+    it('requires authentication', async () => {
+      const { app } = await buildHarness();
+      await request(app).get('/api/v1/keypad-settings').expect(401);
     });
   });
 

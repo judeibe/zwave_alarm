@@ -95,6 +95,12 @@ export const lockoutPolicyUpdateSchema = z
   .partial()
   .refine((body) => Object.keys(body).length > 0, 'must include at least one field to change');
 
+/** `PATCH /api/v1/keypad-settings` body. */
+export const keypadSettingsUpdateSchema = z
+  .object({ requireCodeToArm: z.boolean() })
+  .partial()
+  .refine((body) => Object.keys(body).length > 0, 'must include at least one field to change');
+
 /** `GET /api/v1/events` query string (`since` is epoch-ms, `limit` a positive integer). */
 // `z.coerce.number()` alone would turn an empty `?since=` into 0, so require a non-empty string
 // first; `z.number()` then rejects the NaN that a non-numeric string converts to.

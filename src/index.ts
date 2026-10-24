@@ -27,6 +27,7 @@ import { HaLinkRepository } from './db/repositories/ha-link-repository.js';
 import { KeypadAdapterRegistry } from './keypads/keypad-registry.js';
 import { discoverKeypadAdapters } from './keypads/discovery.js';
 import { KeypadService } from './keypads/keypad-service.js';
+import { KeypadSettingsRepository, KeypadSettingsService } from './keypads/keypad-settings.js';
 import { KeypadController } from './keypads/keypad-controller.js';
 import { KeypadGateway } from './zwave/keypad-gateway.js';
 import { LockService } from './locks/lock-service.js';
@@ -97,11 +98,15 @@ const lockService = new LockService({
   getSchedule: (...args) => lockGateway.getSchedule(...args),
 });
 const lockGateway: ZwaveLockGateway = new ZwaveLockGateway(driver, lockService);
-new KeypadController(keypadService, panelService, userRepo, lockoutService, eventRepo, zoneRepo, {
+// KEYPAD_REQUIRE_CODE_TO_ARM is only the default; an administrator's choice (PATCH /keypad-settings) wins.
+const keypadSettings = new KeypadSettingsService(new KeypadSettingsRepository(db), {
   requireCodeToArm: config.keypadRequireCodeToArm,
+});
+new KeypadController(keypadService, panelService, userRepo, lockoutService, eventRepo, zoneRepo, {
+  requireCodeToArm: () => keypadSettings.get().requireCodeToArm,
 }).start();
 
-const app = createApp({ panelService, userRepo, zoneRepo, sensorRepo, lockoutService, eventRepo, haLinkRepo, driver, keypadService, lockService, driverState: getDriverState });
+const app = createApp({ panelService, userRepo, zoneRepo, sensorRepo, lockoutService, eventRepo, haLinkRepo, driver, keypadService, keypadSettings, lockService, driverState: getDriverState });
 const httpServer = createServer(app);
 
 // Shares the REST API's HTTP server/port, per contracts/websocket-events.md's
@@ -114,9 +119,9 @@ const wss = createWebSocketServer(
     path: '/api/v1/stream',
     verifyClient: createWsVerifyClient({ haLinkLookup: haLinkRepo, sessionMiddleware }),
   },
-  () => buildLiveSnapshot({ panelService, zoneRepo, keypadService, lockService, driverStatus }),
+  () => buildLiveSnapshot({ panelService, zoneRepo, keypadService, keypadSettings, lockService, driverStatus }),
 );
-attachWsBroadcaster(wss, { panelService, sensorMapper, eventRepo, zoneRepo, keypadService, lockService, driverStatus });
+attachWsBroadcaster(wss, { panelService, sensorMapper, eventRepo, zoneRepo, keypadService, keypadSettings, lockService, driverStatus });
 
 // After the siren and broadcaster are listening: re-schedules an exit/entry delay that was in
 // flight when the service last stopped (SC-006), which may itself commit a transition.
