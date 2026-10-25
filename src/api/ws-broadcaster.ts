@@ -8,6 +8,7 @@ import { EventRepository, type SecurityEvent } from '../events/event-repository.
 import type { DriverState } from '../zwave/driver.js';
 import type { AlarmEvent } from '../alarm/alarm-event-repository.js';
 import type { AlarmEventService } from '../alarm/alarm-event-service.js';
+import type { SirenDevice, SirenRepository } from '../alarm/siren-repository.js';
 import type { LockService, LockSummary } from '../locks/lock-service.js';
 import type { KeypadSettings, KeypadSettingsService } from '../keypads/keypad-settings.js';
 import type { KeypadPublicEvent, KeypadService, KeypadSummary } from '../keypads/keypad-service.js';
@@ -23,6 +24,8 @@ export interface WsBroadcasterDeps {
   keypadSettings?: KeypadSettingsService;
   /** Optional: `alarm.event` messages and the snapshot's `alarmEvents` are only sent when supplied. */
   alarmEvents?: AlarmEventService;
+  /** Optional: `siren.changed` / `siren.removed` messages and the snapshot's `sirens` are only sent when supplied. */
+  sirenRepo?: SirenRepository;
   /** Optional: `lock.changed` events and the snapshot's `locks` are only sent when supplied. */
   lockService?: LockService;
   /** Optional: `driver.state` events are only sent when supplied (src/index.ts passes the real driver's). */
@@ -40,7 +43,7 @@ export interface DriverStatusSource {
  * live state, for use as `src/api/ws.ts`'s `createWebSocketServer`
  * `buildSnapshot` argument.
  */
-export function buildLiveSnapshot(deps: Pick<WsBroadcasterDeps, 'panelService' | 'zoneRepo' | 'keypadService' | 'keypadSettings' | 'lockService' | 'driverStatus' | 'alarmEvents'>): Record<string, unknown> {
+export function buildLiveSnapshot(deps: Pick<WsBroadcasterDeps, 'panelService' | 'zoneRepo' | 'keypadService' | 'keypadSettings' | 'lockService' | 'driverStatus' | 'alarmEvents' | 'sirenRepo'>): Record<string, unknown> {
   const panel = deps.panelService.getState();
   return {
     type: 'snapshot',
@@ -56,6 +59,7 @@ export function buildLiveSnapshot(deps: Pick<WsBroadcasterDeps, 'panelService' |
     modes: deps.panelService.getModes(),
     zones: deps.zoneRepo.list(),
     ...(deps.alarmEvents && { alarmEvents: deps.alarmEvents.listActive() }),
+    ...(deps.sirenRepo && { sirens: deps.sirenRepo.list() }),
     ...(deps.keypadService && { keypads: deps.keypadService.list() }),
     ...(deps.keypadSettings && { keypadSettings: deps.keypadSettings.get() }),
     ...(deps.lockService && { locks: deps.lockService.list() }),
@@ -111,6 +115,13 @@ export function attachWsBroadcaster(wss: WebSocketServer, deps: WsBroadcasterDep
     });
   });
 
+  deps.sirenRepo?.on('siren_changed', (siren: SirenDevice) => {
+    broadcast(wss, { type: 'siren.changed', siren });
+  });
+  deps.sirenRepo?.on('siren_removed', (nodeId: number) => {
+    broadcast(wss, { type: 'siren.removed', nodeId });
+  });
+
   deps.alarmEvents?.on('alarm_event', (event: AlarmEvent) => {
     broadcast(wss, { type: 'alarm.event', event });
   });
@@ -131,6 +142,7 @@ export function attachWsBroadcaster(wss: WebSocketServer, deps: WsBroadcasterDep
       sensorId: sensor.id,
       connectivityStatus: sensor.connectivityStatus,
       batteryLevel: sensor.batteryLevel,
+      tampered: sensor.tampered,
     });
   });
 

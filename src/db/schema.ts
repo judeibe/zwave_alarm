@@ -201,6 +201,21 @@ const MIGRATIONS: Migration[] = [
       UPDATE sensor_devices SET alarm_kind = 'SMOKE' WHERE category = 'life-safety';
     `,
   },
+  {
+    // Ring spec phase 3b: enrolled sirens (SIREN_NODE_ID seeds the first) and a sensor's tamper state.
+    id: '010_sirens_and_tamper',
+    sql: `
+      CREATE TABLE sirens (
+        node_id INTEGER PRIMARY KEY,
+        kind TEXT NOT NULL CHECK (kind IN ('BASE', 'DOME', 'OUTDOOR')),
+        name TEXT NOT NULL,
+        duration_sec INTEGER NOT NULL CHECK (duration_sec BETWEEN 60 AND 600),
+        created_at INTEGER NOT NULL
+      );
+
+      ALTER TABLE sensor_devices ADD COLUMN tampered INTEGER NOT NULL DEFAULT 0 CHECK (tampered IN (0, 1));
+    `,
+  },
 ];
 
 function ensureMigrationsTable(db: Database.Database): void {

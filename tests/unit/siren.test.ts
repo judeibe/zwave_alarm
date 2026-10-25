@@ -11,6 +11,7 @@ import { PanelService } from '../../src/alarm/panel-service.js';
 import { Siren } from '../../src/alarm/siren.js';
 import { AlarmEventRepository } from '../../src/alarm/alarm-event-repository.js';
 import { AlarmEventService } from '../../src/alarm/alarm-event-service.js';
+import { SirenRepository } from '../../src/alarm/siren-repository.js';
 
 const EXIT_DELAY_MS = 1_000;
 const ENTRY_DELAY_MS = 1_000;
@@ -146,7 +147,7 @@ describe('Siren', () => {
       .find((entry) => entry.level === 'warn');
     expect(warnEntry).toMatchObject({
       module: 'alarm/siren',
-      message: expect.stringContaining('no siren device configured'),
+      message: expect.stringContaining('no siren enrolled'),
     });
 
     logSpy.mockRestore();
@@ -217,5 +218,61 @@ describe('Siren following alarm events', () => {
     panelService.raiseEmergency('MEDICAL');
 
     expect(sirenNode.setValue).not.toHaveBeenCalled();
+  });
+});
+
+describe('Siren with enrolled sirens', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function build() {
+    const db = createDatabase(':memory:');
+    const alarmEvents = new AlarmEventService(new AlarmEventRepository(db));
+    const sirenRepo = new SirenRepository(db);
+    const panelService = new PanelService(new AlarmPanelRepository(db), new EventRepository(db), { alarmEvents });
+    const driver = new MockDriver();
+    const nodes = { 5: new MockNode(), 6: new MockNode() };
+    driver.controller.nodes.add(5, nodes[5]);
+    driver.controller.nodes.add(6, nodes[6]);
+    sirenRepo.upsert({ nodeId: 5, kind: 'BASE' });
+    sirenRepo.upsert({ nodeId: 6, kind: 'OUTDOOR', durationSec: 60 });
+    new Siren(driver as unknown as Driver, panelService, { nodeId: null, sirenRepo, alarmEvents });
+    return { panelService, alarmEvents, sirenRepo, nodes };
+  }
+
+  const target = { commandClass: CommandClasses['Binary Switch'], property: 'targetValue' };
+
+  it('sounds every enrolled siren, and the outdoor one stops after its own duration while the base keeps going', async () => {
+    const { panelService, alarmEvents, nodes } = build();
+
+    panelService.raiseEmergency('PANIC');
+    expect(nodes[5].setValue).toHaveBeenLastCalledWith(target, true);
+    expect(nodes[6].setValue).toHaveBeenLastCalledWith(target, true);
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(nodes[6].setValue).toHaveBeenLastCalledWith(target, false);
+    expect(nodes[5].setValue).toHaveBeenCalledTimes(1);
+    expect(alarmEvents.listActive()[0]?.sirenState).toBe('sounding');
+
+    await vi.advanceTimersByTimeAsync(540_000);
+    expect(nodes[5].setValue).toHaveBeenLastCalledWith(target, false);
+    expect(alarmEvents.listActive()[0]?.sirenState).toBe('timed_out');
+    expect(nodes[6].setValue).toHaveBeenCalledTimes(2); // not switched off a second time
+  });
+
+  it('switches a siren off when it is un-enrolled mid-alarm, and sounds one enrolled mid-alarm', () => {
+    const { panelService, sirenRepo, nodes } = build();
+    panelService.raiseEmergency('PANIC');
+
+    sirenRepo.delete(6);
+    expect(nodes[6].setValue).toHaveBeenLastCalledWith(target, false);
+
+    sirenRepo.upsert({ nodeId: 6, kind: 'DOME' });
+    expect(nodes[6].setValue).toHaveBeenLastCalledWith(target, true);
   });
 });

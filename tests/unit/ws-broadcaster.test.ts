@@ -204,6 +204,7 @@ describe('ws-broadcaster', () => {
       sensorId: harness.intrusionSensor.id,
       connectivityStatus: 'offline',
       batteryLevel: null,
+      tampered: false,
     });
     expect((await nextMessage(2)).type).toBe('event.recorded'); // the 'device_fault' SecurityEvent
 

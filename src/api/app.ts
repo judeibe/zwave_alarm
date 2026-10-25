@@ -10,6 +10,8 @@ import type { ZoneRepository } from '../db/repositories/zone-repository.js';
 import type { SensorRepository } from '../db/repositories/sensor-repository.js';
 import type { PanelService } from '../alarm/panel-service.js';
 import type { AlarmEventService } from '../alarm/alarm-event-service.js';
+import type { SirenRepository } from '../alarm/siren-repository.js';
+import { createSirenRouter } from './routes/siren-routes.js';
 import type { EventRepository } from '../events/event-repository.js';
 import type { HaLinkRepository } from '../db/repositories/ha-link-repository.js';
 import type { DriverState } from '../zwave/driver.js';
@@ -103,6 +105,8 @@ export interface AppDeps {
   eventRepo: EventRepository;
   /** Serves `GET /api/v1/alarm-events`. */
   alarmEvents?: AlarmEventService;
+  /** Optional: the siren routes (`/sirens`) are mounted only when supplied. */
+  sirenRepo?: SirenRepository;
   haLinkRepo: HaLinkRepository;
   /** Optional: the keypad routes (`/keypads`) are mounted only when supplied. */
   keypadService?: KeypadService;
@@ -190,6 +194,9 @@ export function createApp(deps?: AppDeps): Express {
     }
     if (deps.lockService) {
       app.use('/api/v1', createLockRouter({ lockService: deps.lockService }));
+    }
+    if (deps.sirenRepo) {
+      app.use('/api/v1', createSirenRouter({ sirenRepo: deps.sirenRepo, driver: deps.driver }));
     }
   }
 

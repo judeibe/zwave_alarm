@@ -48,6 +48,8 @@ export interface SensorDevice {
   alertsOnly: boolean;
   /** Set for life-safety sensors (default SMOKE), null for intrusion sensors. */
   alarmKind: SensorAlarmKind | null;
+  /** True from a tamper report (cover removed or moved) until the device reports the cover back. */
+  tampered: boolean;
   updatedAt: number;
 }
 
@@ -65,7 +67,7 @@ export interface CreateSensorInput {
 
 /** Fault fields (connectivity/battery) and breach state are reported separately (FR-012) but both update through this. */
 export type SensorStateUpdate = Partial<
-  Pick<SensorDevice, 'currentState' | 'batteryLevel' | 'connectivityStatus'>
+  Pick<SensorDevice, 'currentState' | 'batteryLevel' | 'connectivityStatus' | 'tampered'>
 >;
 
 interface SensorDeviceRow {
@@ -82,6 +84,7 @@ interface SensorDeviceRow {
   armed_away: number;
   alerts_only: number;
   alarm_kind: SensorAlarmKind | null;
+  tampered: number;
   updated_at: number;
 }
 
@@ -100,6 +103,7 @@ function toDomain(row: SensorDeviceRow): SensorDevice {
     armedAway: row.armed_away === 1,
     alertsOnly: row.alerts_only === 1,
     alarmKind: row.alarm_kind,
+    tampered: row.tampered === 1,
     updatedAt: row.updated_at,
   };
 }
@@ -142,6 +146,7 @@ export class SensorRepository extends Repository {
       armedAway: input.armedAway ?? armed.armedAway,
       alertsOnly: input.alertsOnly ?? false,
       alarmKind: input.category === 'life-safety' ? (input.alarmKind ?? 'SMOKE') : null,
+      tampered: false,
       updatedAt: Date.now(),
     };
     this.run(
@@ -177,11 +182,12 @@ export class SensorRepository extends Repository {
     const next: SensorDevice = { ...toDomain(row), ...changes, updatedAt: Date.now() };
     this.run(
       `UPDATE sensor_devices
-       SET current_state = ?, battery_level = ?, connectivity_status = ?, updated_at = ?
+       SET current_state = ?, battery_level = ?, connectivity_status = ?, tampered = ?, updated_at = ?
        WHERE id = ?`,
       next.currentState,
       next.batteryLevel,
       next.connectivityStatus,
+      next.tampered ? 1 : 0,
       next.updatedAt,
       id,
     );
