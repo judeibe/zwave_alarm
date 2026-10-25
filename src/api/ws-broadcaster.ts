@@ -8,6 +8,7 @@ import { EventRepository, type SecurityEvent } from '../events/event-repository.
 import type { DriverState } from '../zwave/driver.js';
 import type { AlarmEvent } from '../alarm/alarm-event-repository.js';
 import type { AlarmEventService } from '../alarm/alarm-event-service.js';
+import type { LockAutomation, LockEvent } from '../locks/lock-automation.js';
 import type { ModeSchedule, ModeScheduleRepository } from '../alarm/mode-schedule.js';
 import type { SirenDevice, SirenRepository } from '../alarm/siren-repository.js';
 import type { LockService, LockSummary } from '../locks/lock-service.js';
@@ -25,6 +26,8 @@ export interface WsBroadcasterDeps {
   keypadSettings?: KeypadSettingsService;
   /** Optional: `alarm.event` messages and the snapshot's `alarmEvents` are only sent when supplied. */
   alarmEvents?: AlarmEventService;
+  /** Optional: `lock.event` messages are only sent when supplied. */
+  lockAutomation?: LockAutomation;
   /** Optional: `mode-schedule.changed` / `.removed` messages and the snapshot's `modeSchedules` are only sent when supplied. */
   modeSchedules?: ModeScheduleRepository;
   /** Optional: `siren.changed` / `siren.removed` messages and the snapshot's `sirens` are only sent when supplied. */
@@ -117,6 +120,10 @@ export function attachWsBroadcaster(wss: WebSocketServer, deps: WsBroadcasterDep
       modes: deps.panelService.getModes(),
       triggeredBy: resolveTriggeredBy(deps.eventRepo, panel.triggeredBy),
     });
+  });
+
+  deps.lockAutomation?.on('lock_event', (event: LockEvent) => {
+    broadcast(wss, { type: 'lock.event', ...event });
   });
 
   deps.modeSchedules?.on('mode_schedule_changed', (schedule: ModeSchedule) => {

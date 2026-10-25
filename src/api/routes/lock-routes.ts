@@ -1,7 +1,7 @@
 import { Router, type Request, type Response } from 'express';
 import { ApiError } from '../app.js';
 import { asyncHandler } from '../async-handler.js';
-import { lockScheduleBodySchemas, lockScheduleEnabledBodySchema, lockSettingsBodySchema, lockStateBodySchema, lockUserCodeBodySchema, validateBody } from '../validation.js';
+import { lockModeSettingsBodySchema, lockScheduleBodySchemas, lockScheduleEnabledBodySchema, lockSettingsBodySchema, lockStateBodySchema, lockUserCodeBodySchema, validateBody } from '../validation.js';
 import { requireAuth, requireRole } from '../../auth/authorize.js';
 import {
   LockCommunicationError,
@@ -16,9 +16,12 @@ import {
   type UserCodeStatus,
 } from '../../locks/lock-service.js';
 import { LockValueError } from '../../locks/schlage.js';
+import type { LockModeSettings, LockModeSettingsRepository } from '../../locks/lock-mode-settings.js';
 
 export interface LockRouteDeps {
   lockService: LockService;
+  /** Serves `/locks/{nodeId}/mode-settings`; the routes are only mounted when supplied. */
+  modeSettings?: LockModeSettingsRepository;
 }
 
 /** Maps the lock domain's errors onto the API's error statuses; anything else is a server error. */
@@ -69,7 +72,7 @@ function parseKind(value: string): ScheduleKind {
  * Entry Lock schedules. Nothing here knows a configuration parameter number; that is `LockService`.
  * Every route needs the administrator or member role, and none ever returns a stored user code.
  */
-export function createLockRouter({ lockService }: LockRouteDeps): Router {
+export function createLockRouter({ lockService, modeSettings }: LockRouteDeps): Router {
   const router = Router();
   const guard = [requireAuth, requireRole('administrator', 'member', 'installer')];
 
@@ -83,6 +86,34 @@ export function createLockRouter({ lockService }: LockRouteDeps): Router {
         throw toApiError(err);
       }
     });
+
+  if (modeSettings) {
+    // What the lock does with the alarm (arm on lock, disarm on unlock, a lock/unlock per mode). Changing it
+    // is for an administrator or installer; reading it for anyone who can see locks.
+    router.get(
+      '/locks/:nodeId/mode-settings',
+      ...guard,
+      lockHandler(async (nodeId, _req, res) => {
+        lockService.get(nodeId);
+        res.status(200).json(modeSettings.forNode(nodeId));
+        await Promise.resolve();
+      }),
+    );
+
+    router.put(
+      '/locks/:nodeId/mode-settings',
+      ...guard,
+      requireRole('administrator', 'installer'),
+      validateBody(lockModeSettingsBodySchema),
+      lockHandler(async (nodeId, req, res) => {
+        lockService.get(nodeId);
+        const updated = modeSettings.update(nodeId, req.body as Parameters<LockModeSettingsRepository['update']>[1]);
+        lockService.republish(nodeId);
+        res.status(200).json(updated satisfies LockModeSettings);
+        await Promise.resolve();
+      }),
+    );
+  }
 
   router.get('/locks', ...guard, (_req, res) => {
     res.status(200).json({ locks: lockService.list() });

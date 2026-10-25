@@ -195,6 +195,22 @@ export const updateScheduleBodySchema = z
   .partial()
   .refine(nonEmpty, NON_EMPTY_MESSAGE);
 
+const lockAction = z.enum(['lock', 'unlock']).nullable();
+
+/**
+ * `PUT /api/v1/locks/{nodeId}/mode-settings` body: any of the three switches and any mode's action
+ * (`"lock"`, `"unlock"` or `null` for none). Fields left out keep their value.
+ */
+export const lockModeSettingsBodySchema = z
+  .object({
+    armOnLockWithCode: z.boolean(),
+    armOnOneTouch: z.boolean(),
+    disarmOnUnlock: z.boolean(),
+    actions: z.object({ disarmed: lockAction, armed_home: lockAction, armed_away: lockAction }).partial(),
+  })
+  .partial()
+  .refine(nonEmpty, NON_EMPTY_MESSAGE);
+
 const scheduledMode = z.enum(['disarmed', 'armed_home', 'armed_away']);
 
 /**

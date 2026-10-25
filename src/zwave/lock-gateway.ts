@@ -178,9 +178,15 @@ export class ZwaveLockGateway implements LockPort {
     });
     // The keypad, thumb-turn and auto-lock report the bolt as Access Control notifications.
     node.on('notification', (endpoint, ccId, args) => {
-      const locked = ccId === CommandClasses.Notification && (args as { type?: number }).type === 0x06 ? lockedFromAccessControlEvent((args as { event: number }).event) : undefined;
+      const isAccessControl = ccId === CommandClasses.Notification && (args as { type?: number }).type === 0x06;
+      const locked = isAccessControl ? lockedFromAccessControlEvent((args as { event: number }).event) : undefined;
       if (locked !== undefined) {
         this.locks.recordLocked(endpoint.nodeId, locked);
+      }
+      if (isAccessControl) {
+        // A keypad operation with a code carries the user slot in the notification's parameters.
+        const { event, parameters } = args as { event: number; parameters?: { userId?: number } };
+        this.locks.recordAccess(endpoint.nodeId, event, typeof parameters?.userId === 'number' ? parameters.userId : undefined);
       }
     });
     node.on('dead', (n) => this.locks.updateStatus(n.id, { connectivityStatus: 'offline' }));

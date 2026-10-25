@@ -268,12 +268,17 @@ export class UserRepository extends Repository {
     this.run('UPDATE users SET duress_hash = ? WHERE id = ?', code === null ? null : hashCredential(code), id);
   }
 
-  /** Removes installers whose 48 h access has ended; returns them. */
-  deleteExpiredInstallers(now: number): User[] {
-    const expired = this.all<UserRow>(
+  /** Installers whose 48 h access has ended. */
+  listExpiredInstallers(now: number): User[] {
+    return this.all<UserRow>(
       "SELECT * FROM users WHERE role = 'installer' AND guest_expires_at IS NOT NULL AND guest_expires_at <= ?",
       now,
     ).map(toDomain);
+  }
+
+  /** Removes installers whose 48 h access has ended; returns them. */
+  deleteExpiredInstallers(now: number): User[] {
+    const expired = this.listExpiredInstallers(now);
     expired.forEach((user) => this.delete(user.id));
     return expired;
   }

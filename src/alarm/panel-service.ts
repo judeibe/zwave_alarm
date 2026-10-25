@@ -66,6 +66,8 @@ export interface PanelCommandOptions {
   actor?: string;
   /** Record the command's history events as the system's (used by mode schedules). */
   systemEvent?: boolean;
+  /** The device the command came from (a lock), recorded as the history event's device. */
+  device?: { id: string; name: string };
 }
 
 export type SensorBreachInput = Pick<SensorDevice, 'id' | 'zoneId' | 'category'> &
@@ -103,6 +105,8 @@ interface CommandContext {
   actor: string | null;
   /** Record this command's events as caused by the system (a schedule) rather than a person. */
   systemEvent: boolean;
+  /** The device the command came from, recorded on its history events. */
+  device: { id: string; name: string } | null;
 }
 
 type PanelCommand = 'arm_away' | 'arm_home' | 'disarm' | 'disarm_zone';
@@ -393,6 +397,7 @@ export class PanelService extends EventEmitter {
         bypassedSensors: [],
         actor: null,
         systemEvent: false,
+        device: null,
       };
       this.clearPendingTimer();
       this.pendingTimer = setTimeout(() => this.completeArming(target, context), remainingMs);
@@ -430,6 +435,7 @@ export class PanelService extends EventEmitter {
       bypassedSensors: [],
       actor: options.actor ?? null,
       systemEvent: options.systemEvent ?? false,
+      device: options.device ?? null,
     });
     return this.dispatcher.dispatch<AlarmPanel>(request);
   }
@@ -448,6 +454,7 @@ export class PanelService extends EventEmitter {
       bypassedSensors: [],
       actor: null,
       systemEvent: false,
+      device: null,
     };
     this.commandContext.delete(request);
 
@@ -521,6 +528,8 @@ export class PanelService extends EventEmitter {
       type: 'armed',
       source: eventSource(context.source, context.systemEvent),
       actor: context.actor,
+      deviceId: context.device?.id ?? null,
+      deviceName: context.device?.name ?? null,
       sourceUserId: context.sourceUserId,
       details: context.bypassNote,
     });
@@ -615,6 +624,8 @@ export class PanelService extends EventEmitter {
       type: wasAlarm ? 'alarm_cleared' : 'disarmed',
       source: eventSource(context.source, context.systemEvent),
       actor: context.actor,
+      deviceId: context.device?.id ?? null,
+      deviceName: context.device?.name ?? null,
       sourceUserId: context.sourceUserId,
       // Only the alarm-clearing case needs "cleared, and by whom" (User Story 3's second
       // acceptance scenario); a plain disarm from an already-safe state doesn't.
@@ -659,6 +670,8 @@ export class PanelService extends EventEmitter {
         type: 'alarm_cleared',
         source: eventSource(context.source, context.systemEvent),
       actor: context.actor,
+      deviceId: context.device?.id ?? null,
+      deviceName: context.device?.name ?? null,
         sourceUserId: context.sourceUserId,
         relatedZoneId: zoneId,
         details: `${label} alarm cleared${who}; the rest of the panel stays armed`,
@@ -670,6 +683,8 @@ export class PanelService extends EventEmitter {
       type: 'disarmed',
       source: eventSource(context.source, context.systemEvent),
       actor: context.actor,
+      deviceId: context.device?.id ?? null,
+      deviceName: context.device?.name ?? null,
       sourceUserId: context.sourceUserId,
       relatedZoneId: zoneId,
       details: `${label} disarmed${who}; the rest of the panel stays armed`,

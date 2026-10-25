@@ -16,6 +16,8 @@ import {
   type SchlageParameter,
 } from './schlage.js';
 
+import { DEFAULT_LOCK_MODE_SETTINGS, type LockModeSettings } from './lock-mode-settings.js';
+
 const logger = createLogger('locks/service');
 
 /** Weekday numbers follow the Schedule Entry Lock CC: 0 Sunday ... 6 Saturday. */
@@ -172,6 +174,8 @@ export interface LockSummary {
   /** Whether the bolt is thrown; `null` until the lock has reported it, or while it says unknown. */
   locked: boolean | null;
   capabilities: LockCapabilities;
+  /** What the lock does with the alarm: arm/disarm on lock/unlock, and a lock/unlock per panel mode. */
+  modeSettings: LockModeSettings;
 }
 
 /** A Schlage lock paired with the controller but not (yet) added to the alarm system. */
@@ -251,6 +255,7 @@ export class LockService extends EventEmitter {
   constructor(
     private readonly port: LockPort,
     private readonly enrollment: LockEnrollmentStore = new MemoryEnrollmentStore(),
+    private readonly modeSettings: { forNode(nodeId: number): LockModeSettings } = { forNode: () => ({ ...DEFAULT_LOCK_MODE_SETTINGS, actions: { ...DEFAULT_LOCK_MODE_SETTINGS.actions } }) },
   ) {
     super();
   }
@@ -409,6 +414,27 @@ export class LockService extends EventEmitter {
     const entry = this.entry(nodeId);
     await this.communicate(locked ? 'Locking' : 'Unlocking', () => this.port.setLocked(nodeId, locked));
     return this.summarize(nodeId, entry);
+  }
+
+  /** Pushes the lock's summary to listeners again, e.g. after its mode settings changed. */
+  republish(nodeId: number): LockSummary {
+    return this.publish(nodeId, this.entry(nodeId));
+  }
+
+  /**
+   * Records an Access Control notification from an enrolled lock (Z-Wave: 1 manual lock, 2 manual unlock,
+   * 3/4 RF lock/unlock, 5/6 keypad lock/unlock, 9 auto lock, 0x0B jammed) and emits `'lock_access'` with what
+   * happened and how. `slot` is the user slot the keypad reported, absent for a one-touch lock or a thumb-turn.
+   */
+  recordAccess(nodeId: number, event: number, slot?: number): void {
+    const entry = this.locks.get(nodeId);
+    if (!entry || !this.enrollment.isEnrolled(nodeId)) {
+      return;
+    }
+    const access = accessFromEvent(event, slot);
+    if (access) {
+      this.emit('lock_access', { nodeId, label: entry.label, ...access });
+    }
   }
 
   /** Records the bolt state the lock reported (a Door Lock report or an Access Control notification). */
@@ -670,7 +696,41 @@ export class LockService extends EventEmitter {
         },
         alarmSettings: parametersForModel(entry.model).some((definition) => definition.key === 'alarmMode'),
       },
+      modeSettings: this.modeSettings.forNode(nodeId),
     };
+  }
+}
+
+/** How a lock was operated, from an Access Control notification event code. */
+export interface LockAccess {
+  kind: 'locked' | 'unlocked' | 'jammed';
+  method: 'keypad' | 'one_touch' | 'manual' | 'app' | 'auto' | 'unknown';
+  /** The user slot, for a keypad operation with a code. */
+  slot: number | null;
+}
+
+export function accessFromEvent(event: number, slot?: number): LockAccess | undefined {
+  const userSlot = slot !== undefined && slot > 0 ? slot : null;
+  switch (event) {
+    case 0x01:
+      return { kind: 'locked', method: 'manual', slot: null };
+    case 0x02:
+      return { kind: 'unlocked', method: 'manual', slot: null };
+    case 0x03:
+      return { kind: 'locked', method: 'app', slot: null };
+    case 0x04:
+      return { kind: 'unlocked', method: 'app', slot: null };
+    case 0x05:
+      // A keypad lock with a code names the user slot; without one it was the one-touch button.
+      return { kind: 'locked', method: userSlot === null ? 'one_touch' : 'keypad', slot: userSlot };
+    case 0x06:
+      return { kind: 'unlocked', method: userSlot === null ? 'unknown' : 'keypad', slot: userSlot };
+    case 0x09:
+      return { kind: 'locked', method: 'auto', slot: null };
+    case 0x0b:
+      return { kind: 'jammed', method: 'unknown', slot: null };
+    default:
+      return undefined;
   }
 }
 
