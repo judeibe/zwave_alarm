@@ -23,10 +23,31 @@ export interface AlarmPanel {
    * Life-safety sensors are never bypassed (FR-015).
    */
   disarmedZoneIds: string[];
+  /**
+   * Sensors bypassed for the current arm session (Ring spec, Arming): they cannot raise an alarm until the
+   * panel is disarmed, which clears the list. Persisted so a restart keeps the bypass.
+   */
+  bypassedDeviceIds: string[];
+  /** When the exit delay ends: `pendingDelayEndsAt` while `arming`, else null. */
+  exitEndsAt: number | null;
+  /** When the entry delay ends: `pendingDelayEndsAt` while `alarm_pending`, else null. */
+  entryEndsAt: number | null;
   updatedAt: number;
 }
 
-export type AlarmPanelUpdate = Partial<Omit<AlarmPanel, 'updatedAt' | 'disarmedZoneIds'>>;
+export type AlarmPanelUpdate = Partial<
+  Omit<AlarmPanel, 'updatedAt' | 'disarmedZoneIds' | 'exitEndsAt' | 'entryEndsAt'>
+>;
+
+function withDelayViews<T extends Pick<AlarmPanel, 'mode' | 'pendingDelayEndsAt'>>(
+  panel: T,
+): T & Pick<AlarmPanel, 'exitEndsAt' | 'entryEndsAt'> {
+  return {
+    ...panel,
+    exitEndsAt: panel.mode === 'arming' ? panel.pendingDelayEndsAt : null,
+    entryEndsAt: panel.mode === 'alarm_pending' ? panel.pendingDelayEndsAt : null,
+  };
+}
 
 interface AlarmPanelRow {
   id: string;
@@ -34,20 +55,22 @@ interface AlarmPanelRow {
   pending_delay_ends_at: number | null;
   triggered_by: string | null;
   armed_mode: ArmedMode | null;
+  bypassed_device_ids: string;
   updated_at: number;
 }
 
 const SINGLETON_ID = 'panel';
 
 function toDomain(row: AlarmPanelRow, disarmedZoneIds: string[]): AlarmPanel {
-  return {
+  return withDelayViews({
     mode: row.mode,
     pendingDelayEndsAt: row.pending_delay_ends_at,
     triggeredBy: row.triggered_by,
     armedMode: row.armed_mode,
     disarmedZoneIds,
+    bypassedDeviceIds: JSON.parse(row.bypassed_device_ids) as string[],
     updatedAt: row.updated_at,
-  };
+  });
 }
 
 /**
@@ -70,14 +93,15 @@ export class AlarmPanelRepository extends Repository {
       return toDomain(row, this.listDisarmedZoneIds());
     }
 
-    const defaults: AlarmPanel = {
+    const defaults: AlarmPanel = withDelayViews({
       mode: 'disarmed',
       pendingDelayEndsAt: null,
       triggeredBy: null,
       armedMode: null,
       disarmedZoneIds: [],
+      bypassedDeviceIds: [],
       updatedAt: Date.now(),
-    };
+    });
     this.run(
       'INSERT INTO alarm_panel (id, mode, pending_delay_ends_at, triggered_by, updated_at) VALUES (?, ?, ?, ?, ?)',
       SINGLETON_ID,
@@ -92,20 +116,21 @@ export class AlarmPanelRepository extends Repository {
   /** Merges `changes` onto the current state, stamps updatedAt, and persists. */
   updatePanel(changes: AlarmPanelUpdate): AlarmPanel {
     const current = this.getPanel();
-    const next: AlarmPanel = {
+    const next: AlarmPanel = withDelayViews({
       ...current,
       ...changes,
       updatedAt: Date.now(),
-    };
+    });
 
     this.run(
       `UPDATE alarm_panel
-         SET mode = ?, pending_delay_ends_at = ?, triggered_by = ?, armed_mode = ?, updated_at = ?
+         SET mode = ?, pending_delay_ends_at = ?, triggered_by = ?, armed_mode = ?, bypassed_device_ids = ?, updated_at = ?
        WHERE id = ?`,
       next.mode,
       next.pendingDelayEndsAt,
       next.triggeredBy,
       next.armedMode,
+      JSON.stringify(next.bypassedDeviceIds),
       next.updatedAt,
       SINGLETON_ID,
     );

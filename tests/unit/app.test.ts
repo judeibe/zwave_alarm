@@ -116,6 +116,7 @@ describe('createApp', () => {
       status: 409,
       code: 'conflict',
       message: 'native command already pending',
+      details: {},
     });
   });
 
@@ -127,6 +128,7 @@ describe('createApp', () => {
       status: 500,
       code: 'internal_error',
       message: 'unexpected failure',
+      details: {},
     });
   });
 

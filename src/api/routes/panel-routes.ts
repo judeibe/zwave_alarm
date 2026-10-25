@@ -4,7 +4,14 @@ import { asyncHandler } from '../async-handler.js';
 import { armBodySchema, codeBodySchema, updateModesBodySchema, validateBody } from '../validation.js';
 import { isAuthRequired, requireAuth, requireRole } from '../../auth/authorize.js';
 import { CommandRejectedError, type CommandSource } from '../../alarm/dispatcher.js';
-import { PanelStateError, type ArmMode, type PanelService } from '../../alarm/panel-service.js';
+import {
+  NeedsBypassError,
+  PanelStateError,
+  UnknownBypassSensorError,
+  type ArmMode,
+  type ArmSource,
+  type PanelService,
+} from '../../alarm/panel-service.js';
 import { verifyCredential, type UserRepository } from '../../auth/user-repository.js';
 import type { LockoutService } from '../../auth/lockout-service.js';
 import type { EventRepository } from '../../events/event-repository.js';
@@ -78,15 +85,23 @@ export function createPanelRouter({
     requireRole('administrator', 'member'),
     validateBody(armBodySchema),
     asyncHandler(async (req, res) => {
-      const { mode } = req.body as { mode: ArmMode };
+      const { mode, bypass, source: armSource } = req.body as { mode: ArmMode; bypass?: string[]; source?: ArmSource };
 
       try {
         const panel = await panelService.arm(mode, {
           source: commandSource(req),
           sourceUserId: callerUserId(req) ?? null,
+          armSource,
+          bypass,
         });
         res.status(200).json(panel);
       } catch (err) {
+        if (err instanceof NeedsBypassError) {
+          throw new ApiError(409, 'needs_bypass', err.message, { faulted: err.faulted });
+        }
+        if (err instanceof UnknownBypassSensorError) {
+          throw new ApiError(400, 'bad_request', err.message, { sensorIds: err.sensorIds });
+        }
         if (err instanceof CommandRejectedError) {
           throw new ApiError(409, 'conflict', err.message);
         }
