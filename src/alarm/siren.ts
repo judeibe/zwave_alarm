@@ -2,123 +2,143 @@ import type { Driver } from 'zwave-js';
 import { setValueFailed } from 'zwave-js';
 import { CommandClasses } from '@zwave-js/core';
 import { createLogger } from '../config/logger.js';
-import type { AlarmPanel } from './panel-repository.js';
 import type { PanelService } from './panel-service.js';
-import { SIREN_DURATION_MS, type AlarmEventService } from './alarm-event-service.js';
+import { FIXED_SIREN_DURATION_SEC, type SirenDevice, type SirenRepository } from './siren-repository.js';
+import type { AlarmEventService } from './alarm-event-service.js';
 
 const logger = createLogger('alarm/siren');
 
 export interface SirenOptions {
-  /** Z-Wave node id of the configured siren/alert device, from `config.sirenNodeId`. Null if none is paired yet. */
-  nodeId: number | null;
   /**
-   * When supplied, the siren follows the alarm events: on while any open event is `sounding`, off when it is
-   * silenced, timed out (after 600 s) or closed by a disarm. Without it the siren follows `alarm_triggered`.
+   * Z-Wave node id of a single base siren, used only when no `sirenRepo` is supplied (the siren table
+   * supersedes it; src/index.ts seeds the table from `config.sirenNodeId`).
+   */
+  nodeId: number | null;
+  /** When supplied, every enrolled siren is driven, each stopping after its own duration. */
+  sirenRepo?: SirenRepository;
+  /**
+   * When supplied, the sirens follow the alarm events: on while any open event is `sounding`, off when it is
+   * silenced, timed out (a siren's own duration) or closed by a disarm. Without it they follow `alarm_triggered`.
    */
   alarmEvents?: AlarmEventService;
 }
 
 /**
- * Activates the local audible siren the moment the panel service (T023)
- * transitions to `alarm_triggered` (FR-013: "the local audible siren is the
- * authoritative notification"), and turns it back off once the alarm clears
- * (any other mode) — subscribing to `PanelService`'s `'panel_changed'` event
- * rather than polling.
+ * Activates the local sirens the moment an alarm sounds (FR-013: "the local audible siren is the
+ * authoritative notification") and turns them off once it clears. Control is via the device's Binary Switch
+ * CC target value, the standard on/off surface Z-Wave siren accessories expose.
  *
- * Control is via the device's Binary Switch CC target value, the standard
- * on/off surface Z-Wave siren/strobe accessories expose. Edge-triggered on
- * `this.applied` so a burst of unrelated panel_changed events (e.g. an
- * unrelated disarm while already disarmed) never re-sends a redundant
- * command to the device.
- *
- * `driver.controller` throws until the Z-Wave driver finishes starting, which
- * can be after the panel already changed: a persisted `alarm_triggered` is
- * restored at boot, and an entry delay that elapsed while the service was down
- * escalates immediately. So the desired state is tracked separately from what
- * has been sent, and anything that can't be sent yet is applied by `sync()`
- * once the driver is ready.
+ * Each siren is switched on once per alarm and stops by itself after its own duration (600 s for a base or
+ * dome siren, 60-600 s for an outdoor one); when the last one stops, the sounding events are marked
+ * `timed_out` but stay open until a disarm. `driver.controller` throws until the Z-Wave driver finishes
+ * starting, which can be after the alarm began (a persisted alarm is restored at boot), so anything that
+ * can't be sent yet is applied by `sync()` once the driver is ready.
  */
 export class Siren {
-  private readonly nodeId: number | null;
-  /** What the panel currently calls for (siren on while `alarm_triggered`). */
-  private desired = false;
-  /** What has actually been sent to the device. */
-  private applied = false;
+  private readonly legacyNodeId: number | null;
+  private readonly sirenRepo: SirenRepository | undefined;
   private readonly alarmEvents: AlarmEventService | undefined;
-  private autoStop: NodeJS.Timeout | null = null;
+  /** Sirens currently switched on, with the timer that will stop each. */
+  private readonly on = new Map<number, NodeJS.Timeout | null>();
+  /** Sirens that already ran their full duration in this alarm; they stay off until the alarm clears. */
+  private readonly expired = new Set<number>();
+  private warnedNoSiren = false;
 
   constructor(
     private readonly driver: Driver,
     private readonly panelService: PanelService,
     options: SirenOptions,
   ) {
-    this.nodeId = options.nodeId;
+    this.legacyNodeId = options.nodeId;
+    this.sirenRepo = options.sirenRepo;
     this.alarmEvents = options.alarmEvents;
-    if (this.nodeId === null) {
+    if (this.sirens().length === 0) {
       // FR-013 requires the local siren to be the authoritative notification, so a fresh install
-      // with no SIREN_NODE_ID set is a real gap the installer needs to notice, not a silent no-op.
-      logger.warn(
-        'no siren device configured (SIREN_NODE_ID unset) — the local siren will not sound when the alarm triggers',
-      );
+      // with no siren enrolled is a real gap the installer needs to notice, not a silent no-op.
+      logger.warn('no siren enrolled — the local siren will not sound when the alarm triggers');
     }
     if (this.alarmEvents) {
       this.alarmEvents.on('alarm_event', () => this.reevaluate());
     } else {
-      panelService.on('panel_changed', (panel: AlarmPanel) => this.handlePanelChanged(panel));
+      panelService.on('panel_changed', () => this.reevaluate());
     }
+    this.sirenRepo?.on('siren_changed', () => this.reevaluate());
+    this.sirenRepo?.on('siren_removed', (nodeId: number) => this.release(nodeId));
   }
 
-  /**
-   * Re-evaluates the panel's current state and sends the siren command if it differs from what was
-   * last sent. Call once when the Z-Wave driver becomes ready (src/index.ts) so a siren state that
-   * had to wait for it — notably an `alarm_triggered` restored after a restart — takes effect.
-   */
+  /** Re-evaluates the alarm and sends whatever the sirens still need. Call once when the driver is ready. */
   sync(): void {
     this.reevaluate();
   }
 
+  private sirens(): Pick<SirenDevice, 'nodeId' | 'durationSec'>[] {
+    if (this.sirenRepo) {
+      return this.sirenRepo.list();
+    }
+    return this.legacyNodeId === null ? [] : [{ nodeId: this.legacyNodeId, durationSec: FIXED_SIREN_DURATION_SEC }];
+  }
+
   private reevaluate(): void {
-    this.desired = this.alarmEvents
+    const desired = this.alarmEvents
       ? this.alarmEvents.hasSounding()
       : this.panelService.getState().mode === 'alarm_triggered';
-    this.apply();
-  }
 
-  private handlePanelChanged(panel: AlarmPanel): void {
-    this.desired = panel.mode === 'alarm_triggered';
-    this.apply();
-  }
-
-  private apply(): void {
-    if (this.desired === this.applied) {
+    if (!desired) {
+      this.warnedNoSiren = false;
+      this.expired.clear();
+      for (const nodeId of [...this.on.keys()]) {
+        this.release(nodeId);
+      }
+      return;
+    }
+    if (this.sirens().length === 0 && !this.warnedNoSiren) {
+      this.warnedNoSiren = true;
+      logger.warn('alarm sounding but no siren is enrolled');
+    }
+    const sirens = this.sirens().filter((siren) => !this.on.has(siren.nodeId) && !this.expired.has(siren.nodeId));
+    if (sirens.length === 0) {
       return;
     }
     if (!this.driverIsReady()) {
-      logger.info('zwave-js driver not ready yet; siren state will be applied once it is', { on: this.desired });
+      logger.info('zwave-js driver not ready yet; siren state will be applied once it is', { on: true });
       return;
     }
-    this.applied = this.desired;
-    this.scheduleAutoStop();
-    void this.setSirenState(this.desired);
+    for (const siren of sirens) {
+      this.on.set(siren.nodeId, this.alarmEvents ? this.startAutoStop(siren) : null);
+      void this.setSirenState(siren.nodeId, true);
+    }
   }
 
-  /** The siren stops by itself after 600 s (Ring spec, Sirens); the event stays open until a disarm. */
-  private scheduleAutoStop(): void {
-    if (this.autoStop) {
-      clearTimeout(this.autoStop);
-      this.autoStop = null;
-    }
-    if (!this.desired || !this.alarmEvents) {
+  /** Switches one siren off and forgets it (alarm cleared, silenced, or the siren was un-enrolled). */
+  private release(nodeId: number): void {
+    const timer = this.on.get(nodeId);
+    if (timer === undefined) {
       return;
     }
-    const startedAt = this.alarmEvents.oldestSoundingStartedAt() ?? Date.now();
-    const remainingMs = Math.max(0, startedAt + SIREN_DURATION_MS - Date.now());
-    this.autoStop = setTimeout(() => {
-      this.autoStop = null;
-      logger.info('siren reached its maximum duration; stopping it');
-      this.alarmEvents?.timeOutSiren();
+    if (timer) {
+      clearTimeout(timer);
+    }
+    this.on.delete(nodeId);
+    if (this.driverIsReady()) {
+      void this.setSirenState(nodeId, false);
+    }
+  }
+
+  /** A siren stops by itself after its duration (Ring spec, Sirens); the event stays open until a disarm. */
+  private startAutoStop(siren: Pick<SirenDevice, 'nodeId' | 'durationSec'>): NodeJS.Timeout {
+    const startedAt = this.alarmEvents?.oldestSoundingStartedAt() ?? Date.now();
+    const remainingMs = Math.max(0, startedAt + siren.durationSec * 1000 - Date.now());
+    const timer = setTimeout(() => {
+      logger.info('siren reached its maximum duration; stopping it', { nodeId: siren.nodeId });
+      this.on.delete(siren.nodeId);
+      this.expired.add(siren.nodeId);
+      void this.setSirenState(siren.nodeId, false);
+      if (this.on.size === 0) {
+        this.alarmEvents?.timeOutSiren();
+      }
     }, remainingMs);
-    this.autoStop.unref();
+    timer.unref();
+    return timer;
   }
 
   /** `driver.controller` throws until the driver has started (zwave-js's own "not yet ready" guard). */
@@ -130,17 +150,10 @@ export class Siren {
     }
   }
 
-  private async setSirenState(on: boolean): Promise<void> {
-    if (this.nodeId === null) {
-      if (on) {
-        logger.warn('alarm triggered but no siren device is configured (SIREN_NODE_ID unset)');
-      }
-      return;
-    }
-
-    const node = this.driver.controller.nodes.get(this.nodeId);
+  private async setSirenState(nodeId: number, on: boolean): Promise<void> {
+    const node = this.driver.controller.nodes.get(nodeId);
     if (!node) {
-      logger.error('configured siren node not found on the Z-Wave network', { nodeId: this.nodeId });
+      logger.error('configured siren node not found on the Z-Wave network', { nodeId });
       return;
     }
 
@@ -150,15 +163,11 @@ export class Siren {
         on,
       );
       if (setValueFailed(result)) {
-        logger.error('siren device rejected the activation command', {
-          nodeId: this.nodeId,
-          on,
-          status: result.status,
-        });
+        logger.error('siren device rejected the activation command', { nodeId, on, status: result.status });
       }
     } catch (err) {
       logger.error('failed to send siren command', {
-        nodeId: this.nodeId,
+        nodeId,
         on,
         error: err instanceof Error ? err.message : String(err),
       });

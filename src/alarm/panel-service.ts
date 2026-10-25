@@ -19,7 +19,7 @@ export class PanelStateError extends Error {}
 export type ArmSource = 'app' | 'keypad' | 'lock' | 'schedule' | 'alexa';
 const AUTO_BYPASS_SOURCES: ReadonlySet<ArmSource> = new Set(['lock', 'schedule']);
 
-/** Why a sensor blocks arming. `tampered`, `not_set_up` and `updating` are reserved: the server does not track them yet. */
+/** Why a sensor blocks arming. `not_set_up` and `updating` are reserved: the server does not track them yet. */
 export type FaultReason = 'open' | 'tampered' | 'offline' | 'not_set_up' | 'updating';
 
 export interface FaultedSensor {
@@ -217,6 +217,31 @@ export class PanelService extends EventEmitter {
       });
     }
     return this.reportIntrusionBreach(sensor);
+  }
+
+  /**
+   * A tamper report (cover removed or moved) from an intrusion sensor (Ring spec, Triggers). It cannot be
+   * disabled: while the panel is armed it raises a BURGLARY at once, ignoring the per-mode armed flag, the
+   * placement and the entry delay (a bypassed sensor is the one exception, as for any breach). While disarmed
+   * or in the exit delay it only shows on the sensor and in the history, which the caller records.
+   */
+  reportSensorTamper(sensor: SensorBreachInput & Partial<Pick<SensorDevice, 'name'>>): AlarmPanel {
+    const current = this.panelRepo.getPanel();
+    if (sensor.category !== 'intrusion') {
+      return current;
+    }
+    if (current.mode !== 'armed_home' && current.mode !== 'armed_away' && current.mode !== 'alarm_pending') {
+      return current;
+    }
+    if (current.bypassedDeviceIds.includes(sensor.id)) {
+      logger.info('tamper ignored: the sensor is bypassed for this arm session', { sensorId: sensor.id });
+      return current;
+    }
+    return this.triggerAlarm({
+      relatedZoneId: sensor.zoneId,
+      relatedSensorId: sensor.id,
+      details: `Tamper: ${sensor.name ?? sensor.id}`,
+    });
   }
 
   /**
@@ -473,8 +498,13 @@ export class PanelService extends EventEmitter {
       if (sensor.category !== 'intrusion' || sensor.alertsOnly || !armedForMode) {
         continue;
       }
-      const reason: FaultReason | null =
-        sensor.connectivityStatus === 'offline' ? 'offline' : sensor.currentState === 'breached' ? 'open' : null;
+      const reason: FaultReason | null = sensor.tampered
+        ? 'tampered'
+        : sensor.connectivityStatus === 'offline'
+          ? 'offline'
+          : sensor.currentState === 'breached'
+            ? 'open'
+            : null;
       if (reason !== null) {
         faulted.push({ sensorId: sensor.id, name: sensor.name, zoneId: sensor.zoneId, reason });
       }

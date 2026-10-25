@@ -1,6 +1,11 @@
 import type { NextFunction, Request, RequestHandler, Response } from 'express';
 import { z } from 'zod';
 import { ApiError } from './app.js';
+import {
+  OUTDOOR_MAX_DURATION_SEC,
+  OUTDOOR_MIN_DURATION_SEC,
+  SIREN_KINDS,
+} from '../alarm/siren-repository.js';
 import { SENSOR_PLACEMENTS } from '../db/repositories/sensor-repository.js';
 import { MODE_DELAY_MAX_SEC, MODE_DELAY_MIN_SEC } from '../db/repositories/mode-config-repository.js';
 
@@ -77,6 +82,16 @@ export const panicBodySchema = z.object({
 export const alarmEventsQuerySchema = z.object({
   active: z.enum(['true', 'false']).optional(),
   limit: z.coerce.number().int().min(1).max(200).optional(),
+});
+
+/**
+ * `PUT /api/v1/sirens/{nodeId}` body: enrols a Z-Wave node as a siren. `durationSec` (60-600) is only
+ * accepted for `OUTDOOR`, the one siren whose duration is configurable; BASE and DOME run a fixed 600 s.
+ */
+export const sirenBodySchema = z.object({
+  kind: z.enum(SIREN_KINDS),
+  name: name.optional(),
+  durationSec: z.number().int().min(OUTDOOR_MIN_DURATION_SEC).max(OUTDOOR_MAX_DURATION_SEC).optional(),
 });
 
 const delaySeconds = z.number().int().min(MODE_DELAY_MIN_SEC).max(MODE_DELAY_MAX_SEC);

@@ -36,6 +36,9 @@ const BREACH_NOTIFICATION_PROPERTIES = new Set([
 const ACCESS_CONTROL_PROPERTY = 'Access Control';
 const DOOR_STATE_PROPERTY_KEYS = new Set(['Door state', 'Door state (simple)']);
 const DOOR_CLOSED_EVENT = 23;
+/** Notification type 7 (Home Security) and its tamper events: 3 = cover removed, 9 = product moved. */
+const HOME_SECURITY_TYPE = 7;
+const TAMPER_EVENTS = new Set([3, 9]);
 
 export interface SensorMapperOptions {
   /** Battery percentage at/below which a sensor is reported as a low-battery fault (FR-012). Defaults to 20. */
@@ -133,6 +136,15 @@ export class SensorMapper extends EventEmitter {
       // TS can't correlate `args`'s type to the `ccId` check above (both are derived from the same
       // Parameters<ZWaveNotificationCallback> union, but the two are checked independently), so narrow explicitly.
       const notificationArgs = args as ZWaveNotificationCallbackArgs_NotificationCC;
+      if (notificationArgs.type === HOME_SECURITY_TYPE) {
+        if (TAMPER_EVENTS.has(notificationArgs.event)) {
+          this.applyTamper(sensor, true); // a tamper is not a breach
+          return;
+        }
+        if (notificationArgs.event === 0) {
+          this.applyTamper(sensor, false);
+        }
+      }
       // Notification CC's "idle"/clear event is always code 0; any other event code is an active alarm state.
       this.applyBreachState(sensor, notificationArgs.event !== 0);
     } else if (ccId === CommandClasses.Battery) {
@@ -151,6 +163,11 @@ export class SensorMapper extends EventEmitter {
     if (args.commandClass === CommandClasses['Binary Sensor']) {
       this.applyBreachState(sensor, Boolean(args.newValue));
     } else if (args.commandClass === CommandClasses.Notification) {
+      const tampered = notificationValueTampered(args);
+      if (tampered !== null) {
+        this.applyTamper(sensor, tampered);
+        return;
+      }
       const breached = notificationValueBreached(args);
       if (breached !== null) {
         this.applyBreachState(sensor, breached);
@@ -173,6 +190,23 @@ export class SensorMapper extends EventEmitter {
     this.emit('sensor_fault', updated);
     if (status === 'offline') {
       this.recordFault(updated, 'connectivity lost');
+    }
+  }
+
+  /**
+   * Persists a tamper transition. Tamper clears only when the device reports the cover back (Ring spec,
+   * Health monitoring). On the ok->tampered edge it is recorded as a `device_fault` and, while the panel is
+   * armed, raises a BURGLARY; the `sensor_fault` event carries the new `tampered` flag either way.
+   */
+  private applyTamper(sensor: SensorDevice, tampered: boolean): void {
+    if (sensor.tampered === tampered) {
+      return;
+    }
+    const updated = this.sensorRepo.updateState(sensor.id, { tampered });
+    this.emit('sensor_fault', updated);
+    if (tampered) {
+      this.recordFault(updated, 'tamper');
+      this.panelService.reportSensorTamper(updated);
     }
   }
 
@@ -216,6 +250,18 @@ export class SensorMapper extends EventEmitter {
       details,
     });
   }
+}
+
+/**
+ * Home Security's cover/tamper state ("Cover status": 0 idle, 3 cover removed, 9 moved). Returns null for
+ * values that say nothing about tamper, so they fall through to breach handling.
+ */
+function notificationValueTampered(args: ZWaveNodeValueUpdatedArgs): boolean | null {
+  const { property, propertyKey, newValue } = args;
+  if (property !== 'Home Security' || typeof propertyKey !== 'string' || typeof newValue !== 'number') {
+    return null;
+  }
+  return /cover|tamper/i.test(propertyKey) ? newValue !== 0 : null;
 }
 
 /**
