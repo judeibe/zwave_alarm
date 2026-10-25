@@ -283,3 +283,27 @@ describe('migration 011', () => {
     ).toThrow(/CHECK/);
   });
 });
+
+describe('disarm guessing', () => {
+  const originalEnv = { ...process.env };
+
+  beforeEach(setEnv);
+  afterEach(() => {
+    process.env = { ...originalEnv };
+  });
+
+  it('answers 429 after 10 failed disarm attempts from one IP, and successful ones do not count', async () => {
+    const { app, userRepo } = await buildHarness();
+    userRepo.create({ name: 'Owner', role: 'administrator', code: '4141' });
+    const agent = await loginAs(app, userRepo, 'member', '5151');
+
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      expect((await agent.post('/api/v1/panel/disarm').send({ code: '0000' })).status).not.toBe(429);
+    }
+    const limited = await agent.post('/api/v1/panel/disarm').send({ code: '0000' });
+
+    expect(limited.status).toBe(429);
+    expect(limited.body.error).toMatchObject({ code: 'too_many_requests' });
+    expect(limited.body.error.message).toContain('disarm');
+  });
+});

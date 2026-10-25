@@ -9,6 +9,8 @@ export interface LoginRateLimitOptions {
   /** Failed login attempts allowed per IP per window. Defaults to 5. */
   limit?: number;
   windowMs?: number;
+  /** What the limiter protects, for the 429 message and the log. Defaults to login. */
+  action?: 'login' | 'disarm';
 }
 
 const DEFAULT_LIMIT = 5;
@@ -37,8 +39,9 @@ export function createLoginRateLimiter(options: LoginRateLimitOptions = {}): Req
     standardHeaders: 'draft-7',
     legacyHeaders: false,
     handler: (req, _res, next) => {
-      logger.warn('login rate limit exceeded', { ip: req.ip });
-      next(new ApiError(429, 'too_many_requests', 'Too many login attempts. Try again in a minute.'));
+      const action = options.action ?? 'login';
+      logger.warn(`${action} rate limit exceeded`, { ip: req.ip });
+      next(new ApiError(429, 'too_many_requests', `Too many ${action} attempts. Try again in a minute.`));
     },
   });
 }

@@ -12,6 +12,7 @@ import {
   validateQuery,
 } from '../validation.js';
 import { isAuthRequired, requireAuth, requireRole } from '../../auth/authorize.js';
+import { createLoginRateLimiter, type LoginRateLimitOptions } from '../../auth/rate-limit.js';
 import { CommandRejectedError, type CommandSource } from '../../alarm/dispatcher.js';
 import {
   NeedsBypassError,
@@ -37,6 +38,8 @@ export interface PanelRouteDeps {
   zoneRepo: ZoneRepository;
   /** Serves `GET /alarm-events`; omitted in tests that don't model alarm events. */
   alarmEvents?: AlarmEventService;
+  /** Overrides the disarm throttle (tests); production allows 10 failed attempts per IP per minute. */
+  disarmRateLimit?: LoginRateLimitOptions;
   /** Supplies the `driver` field of `GET /panel`; omitted in tests that don't model the Z-Wave driver. */
   driverState?: () => DriverState;
 }
@@ -74,6 +77,7 @@ export function createPanelRouter({
   zoneRepo,
   alarmEvents,
   driverState,
+  disarmRateLimit,
 }: PanelRouteDeps): Router {
   const router = Router();
 
@@ -169,8 +173,13 @@ export function createPanelRouter({
     }),
   );
 
+  // Failed attempts only. Four-digit codes are a small space and, with auth off, there is no caller to lock
+  // out, so guessing at disarm is bounded per IP here (the per-account lockout still applies when a user is known).
+  const disarmLimiter = createLoginRateLimiter({ limit: 10, action: 'disarm', ...disarmRateLimit });
+
   router.post(
     '/panel/disarm',
+    disarmLimiter,
     requireAuth,
     validateBody(codeBodySchema),
     asyncHandler(async (req, res) => {
