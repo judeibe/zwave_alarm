@@ -9,10 +9,10 @@ export interface AppConfig {
   sessionSecret: string;
   /** Z-Wave node id of the configured siren/alert device (FR-013). Null until an installer sets it. */
   sirenNodeId: number | null;
-  /** Seconds between arming and the panel becoming armed (FR-004). One value for the whole panel. */
-  exitDelaySeconds: number;
-  /** Seconds between a breach and the alarm triggering (FR-004). One value for the whole panel. */
-  entryDelaySeconds: number;
+  /** First-run seed for every mode's exit delay (seconds). Unset means 60; the database owns it afterwards. */
+  exitDelaySeconds: number | undefined;
+  /** First-run seed for every mode's entry delay (seconds). Unset means 60; the database owns it afterwards. */
+  entryDelaySeconds: number | undefined;
   /** Z-Wave network keys (hex, 16 bytes each) from the environment. Omitted keys are left to zwave-js. */
   securityKeys: Partial<Record<SecurityKeyName, string>>;
   securityKeysLongRange: Partial<Record<LongRangeKeyName, string>>;
@@ -67,17 +67,17 @@ function validateSessionSecret(secret: string): string {
   return secret;
 }
 
-const DEFAULT_DELAY_SECONDS = 30;
-const MAX_DELAY_SECONDS = 600;
+const MAX_DELAY_SECONDS = 180;
 
 /**
- * Optional delay in whole seconds, 0-600. 0 is allowed deliberately: no exit delay arms at once, and
- * no entry delay raises the alarm the instant an intrusion sensor trips.
+ * Optional first-run seed for a per-mode delay, in whole seconds, 0-180 (undefined when unset). 0 is allowed
+ * deliberately: no exit delay arms at once, and no entry delay raises the alarm the instant an intrusion sensor
+ * trips. Once the delays exist in the database (`GET/PATCH /api/v1/modes`) the env var is no longer read.
  */
-function parseDelaySeconds(name: string): number {
+function parseDelaySeconds(name: string): number | undefined {
   const raw = process.env[name];
   if (raw === undefined || raw === '') {
-    return DEFAULT_DELAY_SECONDS;
+    return undefined;
   }
   const seconds = Number(raw);
   if (!Number.isInteger(seconds) || seconds < 0 || seconds > MAX_DELAY_SECONDS) {

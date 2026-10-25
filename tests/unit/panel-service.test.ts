@@ -3,7 +3,8 @@ import { createDatabase } from '../../src/db/schema.js';
 import { AlarmPanelRepository } from '../../src/alarm/panel-repository.js';
 import { EventRepository } from '../../src/events/event-repository.js';
 import { ZoneRepository } from '../../src/db/repositories/zone-repository.js';
-import { SensorRepository } from '../../src/db/repositories/sensor-repository.js';
+import { SensorRepository, type SensorPlacement } from '../../src/db/repositories/sensor-repository.js';
+import { ModeConfigRepository } from '../../src/db/repositories/mode-config-repository.js';
 import { UserRepository } from '../../src/auth/user-repository.js';
 import { PanelService, PanelStateError } from '../../src/alarm/panel-service.js';
 import { CommandRejectedError } from '../../src/alarm/dispatcher.js';
@@ -217,5 +218,111 @@ describe('PanelService', () => {
 
     await expect(haDisarm).rejects.toBeInstanceOf(CommandRejectedError);
     await expect(nativeArm).resolves.toMatchObject({ mode: 'arming' });
+  });
+});
+
+describe('PanelService trigger evaluation (per-mode delays and placements)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function build(modeDelays = { entryDelaySec: 10, exitDelaySec: 5 }) {
+    const db = createDatabase(':memory:');
+    const modeConfig = new ModeConfigRepository(db);
+    modeConfig.ensureSeeded(modeDelays);
+    const panelRepo = new AlarmPanelRepository(db);
+    const service = new PanelService(panelRepo, new EventRepository(db), { modeConfig });
+    const zone = new ZoneRepository(db).create('House');
+    const sensors = new SensorRepository(db);
+    let node = 1;
+    const add = (placement: SensorPlacement, extra: Partial<{ armedHome: boolean; armedAway: boolean; alertsOnly: boolean }> = {}) =>
+      sensors.create({ zwaveNodeId: node++, zoneId: zone.id, name: placement, category: 'intrusion', placement, ...extra });
+    return { service, modeConfig, add };
+  }
+
+  async function armed(service: PanelService, mode: 'armed_home' | 'armed_away', exitSec = 5) {
+    await service.arm(mode, { source: 'native' });
+    await vi.advanceTimersByTimeAsync(exitSec * 1000);
+    expect(service.getState().mode).toBe(mode);
+  }
+
+  it('uses each mode\'s own exit delay', async () => {
+    const { service, modeConfig } = build();
+    modeConfig.update({ armed_home: { exitDelaySec: 30 } });
+
+    const arming = await service.arm('armed_home', { source: 'native' });
+
+    expect((arming.pendingDelayEndsAt ?? 0) - Date.now()).toBe(30_000);
+  });
+
+  it('starts the entry delay for MAIN_DOOR and ENTRYWAY, using the armed mode\'s entry delay', async () => {
+    const { service, modeConfig, add } = build();
+    modeConfig.update({ armed_away: { entryDelaySec: 20 } });
+    await armed(service, 'armed_away');
+
+    const pending = service.reportSensorBreach(add('MAIN_DOOR'));
+
+    expect(pending.mode).toBe('alarm_pending');
+    expect((pending.pendingDelayEndsAt ?? 0) - Date.now()).toBe(20_000);
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(service.getState().mode).toBe('alarm_triggered');
+  });
+
+  it.each(['SECONDARY_DOOR', 'WINDOW', 'ROOM', 'GLASS_BREAK'] as const)('alarms at once for %s', async (placement) => {
+    const { service, add } = build();
+    await armed(service, 'armed_away');
+
+    expect(service.reportSensorBreach(add(placement)).mode).toBe('alarm_triggered');
+  });
+
+  it('alarms at once for a MAIN_DOOR when the mode\'s entry delay is 0', async () => {
+    const { service, add } = build({ entryDelaySec: 0, exitDelaySec: 5 });
+    await armed(service, 'armed_away');
+
+    expect(service.reportSensorBreach(add('MAIN_DOOR')).mode).toBe('alarm_triggered');
+  });
+
+  it('ignores a sensor that is not armed for the current mode, and one that is alerts-only', async () => {
+    const { service, add } = build();
+    await armed(service, 'armed_home');
+
+    expect(service.reportSensorBreach(add('ROOM')).mode).toBe('armed_home'); // motion defaults to armed AWAY only
+    expect(service.reportSensorBreach(add('WINDOW', { alertsOnly: true })).mode).toBe('armed_home');
+    expect(service.reportSensorBreach(add('WINDOW', { armedHome: false })).mode).toBe('armed_home');
+    expect(service.reportSensorBreach(add('WINDOW')).mode).toBe('alarm_triggered');
+  });
+
+  it('does not alarm during the exit delay', async () => {
+    const { service, add } = build();
+    await service.arm('armed_away', { source: 'native' });
+
+    expect(service.reportSensorBreach(add('WINDOW')).mode).toBe('arming');
+  });
+
+  it('does not restart a running entry delay, but a SECONDARY_DOOR during it alarms at once', async () => {
+    const { service, add } = build();
+    await armed(service, 'armed_away');
+    const first = service.reportSensorBreach(add('MAIN_DOOR'));
+    await vi.advanceTimersByTimeAsync(4_000);
+
+    const second = service.reportSensorBreach(add('ENTRYWAY'));
+    expect(second.mode).toBe('alarm_pending');
+    expect(second.pendingDelayEndsAt).toBe(first.pendingDelayEndsAt);
+
+    expect(service.reportSensorBreach(add('SECONDARY_DOOR')).mode).toBe('alarm_triggered');
+  });
+
+  it('reports the modes and persists changes', () => {
+    const { service } = build();
+
+    expect(service.getModes()).toEqual({
+      armed_home: { entryDelaySec: 10, exitDelaySec: 5 },
+      armed_away: { entryDelaySec: 10, exitDelaySec: 5 },
+    });
+    expect(service.updateModes({ armed_home: { entryDelaySec: 0 } }).armed_home).toEqual({ entryDelaySec: 0, exitDelaySec: 5 });
   });
 });

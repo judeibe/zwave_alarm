@@ -148,6 +148,26 @@ const MIGRATIONS: Migration[] = [
       );
     `,
   },
+  {
+    // Ring spec phase 1: where a sensor sits (decides entry delay vs instant alarm), which armed modes it
+    // covers, and per-mode entry/exit delays. Existing intrusion sensors become MAIN_DOOR, armed in both
+    // modes, which is how they behaved before (every intrusion sensor got the entry delay).
+    id: '007_placements_and_mode_config',
+    sql: `
+      ALTER TABLE sensor_devices ADD COLUMN placement TEXT
+        CHECK (placement IN ('MAIN_DOOR', 'SECONDARY_DOOR', 'WINDOW', 'ENTRYWAY', 'ROOM', 'GLASS_BREAK'));
+      ALTER TABLE sensor_devices ADD COLUMN armed_home INTEGER NOT NULL DEFAULT 1 CHECK (armed_home IN (0, 1));
+      ALTER TABLE sensor_devices ADD COLUMN armed_away INTEGER NOT NULL DEFAULT 1 CHECK (armed_away IN (0, 1));
+      ALTER TABLE sensor_devices ADD COLUMN alerts_only INTEGER NOT NULL DEFAULT 0 CHECK (alerts_only IN (0, 1));
+      UPDATE sensor_devices SET placement = 'MAIN_DOOR' WHERE category = 'intrusion';
+
+      CREATE TABLE mode_config (
+        mode TEXT PRIMARY KEY CHECK (mode IN ('armed_home', 'armed_away')),
+        entry_delay_sec INTEGER NOT NULL CHECK (entry_delay_sec BETWEEN 0 AND 180),
+        exit_delay_sec INTEGER NOT NULL CHECK (exit_delay_sec BETWEEN 0 AND 180)
+      );
+    `,
+  },
 ];
 
 function ensureMigrationsTable(db: Database.Database): void {

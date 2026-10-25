@@ -1,6 +1,8 @@
 import type { NextFunction, Request, RequestHandler, Response } from 'express';
 import { z } from 'zod';
 import { ApiError } from './app.js';
+import { SENSOR_PLACEMENTS } from '../db/repositories/sensor-repository.js';
+import { MODE_DELAY_MAX_SEC, MODE_DELAY_MIN_SEC } from '../db/repositories/mode-config-repository.js';
 
 // Upper bounds keep a hostile body from feeding an unbounded string to scrypt/SQLite.
 const MAX_CODE_LENGTH = 128;
@@ -28,9 +30,15 @@ export const updateZoneBodySchema = z
   .partial()
   .refine(nonEmpty, NON_EMPTY_MESSAGE);
 
-/** `PATCH /api/v1/sensors/{sensorId}` body. */
+const placement = z.enum(SENSOR_PLACEMENTS);
+const armedFlags = z.object({ home: z.boolean(), away: z.boolean() }).partial().refine(nonEmpty, NON_EMPTY_MESSAGE);
+
+/**
+ * `PATCH /api/v1/sensors/{sensorId}` body. `armed` is per mode: `{ home?, away? }`. `placement` applies to
+ * intrusion sensors only (the route rejects it for life-safety).
+ */
 export const updateSensorBodySchema = z
-  .object({ name, category: z.enum(['intrusion', 'life-safety']), zoneId: z.string().min(1) })
+  .object({ name, category: z.enum(['intrusion', 'life-safety']), zoneId: z.string().min(1), placement, armed: armedFlags, alertsOnly: z.boolean() })
   .partial()
   .refine(nonEmpty, NON_EMPTY_MESSAGE);
 
@@ -39,7 +47,19 @@ export const assignSensorBodySchema = z.object({
   zwaveNodeId: z.number().int().positive(),
   name,
   category: z.enum(['intrusion', 'life-safety']),
+  placement: placement.optional(),
+  armed: armedFlags.optional(),
+  alertsOnly: z.boolean().optional(),
 });
+
+const delaySeconds = z.number().int().min(MODE_DELAY_MIN_SEC).max(MODE_DELAY_MAX_SEC);
+const modeDelays = z.object({ entryDelaySec: delaySeconds, exitDelaySec: delaySeconds }).partial().refine(nonEmpty, NON_EMPTY_MESSAGE);
+
+/** `PATCH /api/v1/modes` body: per-mode entry/exit delay, 0-180 whole seconds. */
+export const updateModesBodySchema = z
+  .object({ armed_home: modeDelays, armed_away: modeDelays })
+  .partial()
+  .refine(nonEmpty, NON_EMPTY_MESSAGE);
 
 /** contracts/rest-api.md documents `guestExpiresAt` as a string; an epoch-ms number is also accepted. */
 const guestExpiresAt = z

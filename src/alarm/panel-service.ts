@@ -4,6 +4,7 @@ import { AlarmPanelRepository, type AlarmMode, type AlarmPanel, type AlarmPanelU
 import { EventRepository } from '../events/event-repository.js';
 import { createLogger } from '../config/logger.js';
 import type { SensorDevice } from '../db/repositories/sensor-repository.js';
+import type { ModeConfig, ModeConfigRepository, ModeDelays } from '../db/repositories/mode-config-repository.js';
 
 const logger = createLogger('alarm/panel');
 
@@ -27,7 +28,8 @@ export interface PanelCommandOptions {
   zoneName?: string | null;
 }
 
-export type SensorBreachInput = Pick<SensorDevice, 'id' | 'zoneId' | 'category'>;
+export type SensorBreachInput = Pick<SensorDevice, 'id' | 'zoneId' | 'category'> &
+  Partial<Pick<SensorDevice, 'placement' | 'armedHome' | 'armedAway' | 'alertsOnly'>>;
 
 export interface TriggerAlarmContext {
   relatedZoneId?: string | null;
@@ -35,8 +37,7 @@ export interface TriggerAlarmContext {
   details?: string | null;
 }
 
-const DEFAULT_EXIT_DELAY_MS = 30_000;
-const DEFAULT_ENTRY_DELAY_MS = 30_000;
+const DEFAULT_DELAY_MS = 60_000;
 
 interface CommandContext {
   /** Set only for a zone-restricted disarm (`disarm_zone`). */
@@ -80,26 +81,59 @@ function eventSource(source: CommandContext['source']): 'user' | 'home_assistant
  */
 export class PanelService extends EventEmitter {
   private readonly dispatcher: AlarmCommandDispatcher;
+  private readonly modeConfig: ModeConfigRepository | undefined;
   private readonly commandContext = new WeakMap<AlarmCommandRequest, CommandContext>();
-  private readonly exitDelayMs: number;
-  private readonly entryDelayMs: number;
   private pendingTimer: NodeJS.Timeout | null = null;
 
   constructor(
     private readonly panelRepo: AlarmPanelRepository,
     private readonly eventRepo: EventRepository,
-    options: { exitDelayMs?: number; entryDelayMs?: number; dispatcherWindowMs?: number } = {},
+    /**
+     * `modeConfig` is the source of the per-mode delays; `exitDelayMs` / `entryDelayMs` override it for every
+     * mode (tests). With neither, a mode falls back to 60 s.
+     */
+    private readonly options: {
+      modeConfig?: ModeConfigRepository;
+      exitDelayMs?: number;
+      entryDelayMs?: number;
+      dispatcherWindowMs?: number;
+    } = {},
   ) {
     super();
-    this.exitDelayMs = options.exitDelayMs ?? DEFAULT_EXIT_DELAY_MS;
-    this.entryDelayMs = options.entryDelayMs ?? DEFAULT_ENTRY_DELAY_MS;
+    this.modeConfig = options.modeConfig;
     this.dispatcher = new AlarmCommandDispatcher((command) => this.handleCommand(command), {
-      windowMs: options.dispatcherWindowMs,
+      windowMs: this.options.dispatcherWindowMs,
     });
   }
 
   getState(): AlarmPanel {
     return this.panelRepo.getPanel();
+  }
+
+  /** The per-mode entry and exit delays, for snapshots and `panel.changed`. */
+  getModes(): ModeConfig {
+    return this.modeConfig?.getAll() ?? {
+      armed_home: this.delaysFor('armed_home'),
+      armed_away: this.delaysFor('armed_away'),
+    };
+  }
+
+  /** Persists a delay change and tells listeners (the WebSocket broadcaster) via `panel_changed`. */
+  updateModes(changes: Partial<Record<ArmedMode, Partial<ModeDelays>>>): ModeConfig {
+    if (!this.modeConfig) {
+      throw new PanelStateError('Mode configuration is not available.');
+    }
+    const modes = this.modeConfig.update(changes);
+    this.emit('panel_changed', this.panelRepo.getPanel());
+    return modes;
+  }
+
+  private delaysFor(mode: ArmedMode): ModeDelays {
+    const stored = this.modeConfig?.getMode(mode);
+    return {
+      entryDelaySec: this.options.entryDelayMs !== undefined ? this.options.entryDelayMs / 1000 : (stored?.entryDelaySec ?? DEFAULT_DELAY_MS / 1000),
+      exitDelaySec: this.options.exitDelayMs !== undefined ? this.options.exitDelayMs / 1000 : (stored?.exitDelaySec ?? DEFAULT_DELAY_MS / 1000),
+    };
   }
 
   /** disarmed → arming (exit delay starts); resolves once the delay elapses and armed_away/armed_home is committed. */
@@ -251,17 +285,18 @@ export class PanelService extends EventEmitter {
 
     this.clearPendingTimer();
     this.panelRepo.clearDisarmedZones(); // a fresh arming covers every zone again
+    const exitDelayMs = this.delaysFor(targetMode).exitDelaySec * 1000;
     const panel = this.commitPanel(
       {
         mode: 'arming',
-        pendingDelayEndsAt: Date.now() + this.exitDelayMs,
+        pendingDelayEndsAt: Date.now() + exitDelayMs,
         triggeredBy: null,
         armedMode: targetMode,
       },
       { cause: 'arm_command', targetMode, source: context.source, sourceUserId: context.sourceUserId },
     );
 
-    this.pendingTimer = setTimeout(() => this.completeArming(targetMode, context), this.exitDelayMs);
+    this.pendingTimer = setTimeout(() => this.completeArming(targetMode, context), exitDelayMs);
     return panel;
   }
 
@@ -363,9 +398,16 @@ export class PanelService extends EventEmitter {
     return panel;
   }
 
+  /**
+   * Burglary-class evaluation order (Ring spec, Triggers), after the panel-level checks:
+   * disarmed -> ignore; zone disarmed by a guest -> ignore; sensor not armed for this mode (or alerts-only)
+   * -> notify only; exit delay -> no alarm (`arming` is not an armed mode, so it never reaches here);
+   * MAIN_DOOR / ENTRYWAY with an entry delay -> start it (once); otherwise -> alarm at once.
+   * A second sensor tripping during a running entry delay alarms at once unless it is itself a delayed placement.
+   */
   private reportIntrusionBreach(sensor: SensorBreachInput): AlarmPanel {
     const current = this.panelRepo.getPanel();
-    if (current.mode !== 'armed_away' && current.mode !== 'armed_home') {
+    if (current.mode !== 'armed_away' && current.mode !== 'armed_home' && current.mode !== 'alarm_pending') {
       return current; // Intrusion sensors are only monitored while armed (FR-003).
     }
     if (current.disarmedZoneIds.includes(sensor.zoneId)) {
@@ -374,6 +416,30 @@ export class PanelService extends EventEmitter {
         zoneId: sensor.zoneId,
       });
       return current;
+    }
+
+    const armedMode = current.mode === 'alarm_pending' ? current.armedMode : current.mode;
+    const armedForMode = armedMode === 'armed_home' ? sensor.armedHome : sensor.armedAway;
+    if (sensor.alertsOnly === true || armedForMode === false) {
+      logger.info('intrusion breach not armed for this mode: notification only', {
+        sensorId: sensor.id,
+        mode: armedMode,
+        alertsOnly: sensor.alertsOnly === true,
+      });
+      return current;
+    }
+
+    const delayed = sensor.placement === undefined || sensor.placement === null || sensor.placement === 'MAIN_DOOR' || sensor.placement === 'ENTRYWAY';
+    const entryDelayMs = armedMode ? this.delaysFor(armedMode).entryDelaySec * 1000 : 0;
+
+    if (current.mode === 'alarm_pending') {
+      if (delayed) {
+        return current; // The entry delay is already running; it is not restarted.
+      }
+      return this.triggerAlarm({ relatedZoneId: sensor.zoneId, relatedSensorId: sensor.id });
+    }
+    if (!delayed || entryDelayMs === 0) {
+      return this.triggerAlarm({ relatedZoneId: sensor.zoneId, relatedSensorId: sensor.id });
     }
 
     this.clearPendingTimer();
@@ -386,13 +452,13 @@ export class PanelService extends EventEmitter {
     const panel = this.commitPanel(
       {
         mode: 'alarm_pending',
-        pendingDelayEndsAt: Date.now() + this.entryDelayMs,
+        pendingDelayEndsAt: Date.now() + entryDelayMs,
         triggeredBy: breachEvent.id,
       },
       { cause: 'intrusion_breach', sensorId: sensor.id, zoneId: sensor.zoneId },
     );
 
-    this.pendingTimer = setTimeout(() => this.completeEntryDelay(sensor), this.entryDelayMs);
+    this.pendingTimer = setTimeout(() => this.completeEntryDelay(sensor), entryDelayMs);
     return panel;
   }
 

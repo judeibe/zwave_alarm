@@ -17,6 +17,7 @@ import { AlarmPanelRepository } from './alarm/panel-repository.js';
 import { PanelService } from './alarm/panel-service.js';
 import { Siren } from './alarm/siren.js';
 import { EventRepository } from './events/event-repository.js';
+import { ModeConfigRepository } from './db/repositories/mode-config-repository.js';
 import { ZoneRepository } from './db/repositories/zone-repository.js';
 import { SensorRepository } from './db/repositories/sensor-repository.js';
 import { SensorMapper } from './zwave/sensor-mapper.js';
@@ -48,10 +49,10 @@ const userRepo = new UserRepository(db);
 const lockoutPolicyRepo = new LockoutPolicyRepository(db);
 const haLinkRepo = new HaLinkRepository(db);
 
-const panelService = new PanelService(panelRepo, eventRepo, {
-  exitDelayMs: config.exitDelaySeconds * 1000,
-  entryDelayMs: config.entryDelaySeconds * 1000,
-});
+const modeConfigRepo = new ModeConfigRepository(db);
+// The env vars only seed the first run; afterwards the delays live in the database (GET/PATCH /api/v1/modes).
+modeConfigRepo.ensureSeeded({ exitDelaySec: config.exitDelaySeconds, entryDelaySec: config.entryDelaySeconds });
+const panelService = new PanelService(panelRepo, eventRepo, { modeConfig: modeConfigRepo });
 const lockoutService = new LockoutService(userRepo, lockoutPolicyRepo, eventRepo, panelService);
 
 const driver = getDriver();
