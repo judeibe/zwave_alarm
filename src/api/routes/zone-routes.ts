@@ -59,7 +59,7 @@ interface AssignSensorBody {
 export function createZoneRouter({ zoneRepo, sensorRepo, userRepo, driver }: ZoneRouteDeps): Router {
   const router = Router();
 
-  router.get('/zones', requireAuth, requireRole('administrator', 'member'), (_req, res) => {
+  router.get('/zones', requireAuth, requireRole('administrator', 'member', 'installer'), (_req, res) => {
     res.status(200).json(zoneRepo.list());
   });
 
@@ -114,7 +114,7 @@ export function createZoneRouter({ zoneRepo, sensorRepo, userRepo, driver }: Zon
     },
   );
 
-  router.get('/sensors/discoverable', requireAuth, requireRole('administrator'), (_req, res) => {
+  router.get('/sensors/discoverable', requireAuth, requireRole('administrator', 'installer'), (_req, res) => {
     let nodes: DiscoverableNode[];
     try {
       nodes = [...driver.controller.nodes.values()]
@@ -171,7 +171,7 @@ export function createZoneRouter({ zoneRepo, sensorRepo, userRepo, driver }: Zon
     },
   );
 
-  router.delete('/sensors/:sensorId', requireAuth, requireRole('administrator'), (req, res) => {
+  router.delete('/sensors/:sensorId', requireAuth, requireRole('administrator', 'installer'), (req, res) => {
     if (!sensorRepo.findById(req.params.sensorId)) {
       throw new ApiError(404, 'not_found', `Sensor ${req.params.sensorId} does not exist.`);
     }
@@ -182,7 +182,7 @@ export function createZoneRouter({ zoneRepo, sensorRepo, userRepo, driver }: Zon
   router.post(
     '/zones/:zoneId/sensors',
     requireAuth,
-    requireRole('administrator'),
+    requireRole('administrator', 'installer'),
     validateBody(assignSensorBodySchema),
     (req, res) => {
       const { zwaveNodeId, name, category, placement, armed, alertsOnly, alarmKind } = req.body as AssignSensorBody;

@@ -3,7 +3,7 @@ import { ApiError } from '../app.js';
 import { codeBodySchema, validateBody } from '../validation.js';
 import { createLoginRateLimiter, type LoginRateLimitOptions } from '../../auth/rate-limit.js';
 import type { LockoutService } from '../../auth/lockout-service.js';
-import type { UserRepository } from '../../auth/user-repository.js';
+import { INSTALLER_ACCESS_MS, isExpired, type UserRepository } from '../../auth/user-repository.js';
 
 export interface AuthRouteDeps {
   userRepo: UserRepository;
@@ -43,13 +43,17 @@ export function createAuthRouter({ userRepo, lockoutService, loginRateLimit }: A
     if (lockoutService.isLocked(user)) {
       throw new ApiError(423, 'locked', 'This account is locked. Try again later.');
     }
-    if (user.role === 'guest' && user.guestExpiresAt !== null && user.guestExpiresAt <= Date.now()) {
-      throw new ApiError(401, 'unauthorized', 'This guest code has expired.');
+    if (isExpired(user, Date.now())) {
+      throw new ApiError(401, 'unauthorized', `This ${user.role} code has expired.`);
     }
 
     userRepo.resetFailedAttempts(user.id);
     req.session.userId = user.id;
     req.session.role = user.role;
+    if (user.role === 'installer' && user.guestExpiresAt !== null) {
+      // The session ends with the installer's access, so it can't outlive the account it was opened for.
+      req.session.cookie.maxAge = Math.min(INSTALLER_ACCESS_MS, user.guestExpiresAt - Date.now());
+    }
     res.status(200).json({ id: user.id, name: user.name, role: user.role });
   });
 

@@ -274,6 +274,19 @@ export class PanelService extends EventEmitter {
     return event;
   }
 
+  /**
+   * Opens a silent DURESS alarm event (Ring spec, Events): police are requested at once, contacts are not
+   * called and it cannot be cancelled. Call it right after the disarm the duress code performed, so the
+   * disarm doesn't close the new event. Works whatever the panel's mode, including already disarmed.
+   */
+  raiseDuress(details: string): AlarmEvent {
+    const { event } = this.raise({ alarm: { type: 'DURESS' }, details });
+    if (!event) {
+      throw new PanelStateError('Alarm events are not available.');
+    }
+    return event;
+  }
+
   /** Mutes the siren of every sounding alarm event; the alarm stays active. Throws when nothing is sounding. */
   silence(): AlarmEvent[] {
     const silenced = this.options.alarmEvents?.silence() ?? [];

@@ -2,7 +2,12 @@ import type Database from 'better-sqlite3';
 import { randomBytes, randomUUID, scryptSync, timingSafeEqual } from 'node:crypto';
 import { Repository } from '../db/repository.js';
 
-export type UserRole = 'administrator' | 'member' | 'guest';
+export type UserRole = 'administrator' | 'member' | 'guest' | 'installer';
+
+/** An installer's access lasts this long from creation, then the account is removed (Ring spec, Timers). */
+export const INSTALLER_ACCESS_MS = 48 * 60 * 60 * 1000;
+/** The most codes a location holds, duress codes included (Ring spec, Access). */
+export const MAX_CODES = 256;
 
 /** data-model.md's User (Household Member) entity. */
 export interface User {
@@ -10,6 +15,8 @@ export interface User {
   name: string;
   role: UserRole;
   credentialHash: string;
+  /** `scrypt:` hash of the owner's duress code, or null. Only an administrator can have one. */
+  duressHash: string | null;
   haPersonId: string | null;
   haUserId: string | null;
   guestExpiresAt: number | null;
@@ -37,6 +44,7 @@ interface UserRow {
   name: string;
   role: UserRole;
   credential_hash: string;
+  duress_hash: string | null;
   ha_person_id: string | null;
   ha_user_id: string | null;
   guest_expires_at: number | null;
@@ -52,6 +60,7 @@ function toDomain(row: UserRow): User {
     name: row.name,
     role: row.role,
     credentialHash: row.credential_hash,
+    duressHash: row.duress_hash,
     haPersonId: row.ha_person_id,
     haUserId: row.ha_user_id,
     guestExpiresAt: row.guest_expires_at,
@@ -69,6 +78,11 @@ const NO_CODE = '';
 
 export function hasCode(user: Pick<User, 'credentialHash'>): boolean {
   return user.credentialHash !== NO_CODE;
+}
+
+/** True once a guest's or installer's access window has closed. Other roles never expire. */
+export function isExpired(user: Pick<User, 'role' | 'guestExpiresAt'>, now: number): boolean {
+  return (user.role === 'guest' || user.role === 'installer') && user.guestExpiresAt !== null && user.guestExpiresAt <= now;
 }
 
 /** Hashes a plaintext disarm code/password as `scrypt:<saltHex>:<hashHex>` for storage in `users.credential_hash`. */
@@ -105,18 +119,22 @@ export class UserRepository extends Repository {
       throw new Error('a guest user requires guestExpiresAt and/or guestZoneId');
     }
 
+    const createdAt = Date.now();
     const user: User = {
       id: randomUUID(),
       name: input.name,
       role: input.role,
       credentialHash: input.code === undefined ? NO_CODE : hashCredential(input.code),
+      duressHash: null,
       haPersonId: input.haPersonId ?? null,
       haUserId: input.haUserId ?? null,
-      guestExpiresAt: input.role === 'guest' ? (input.guestExpiresAt ?? null) : null,
+      // An installer's expiry is fixed at 48 h from creation whatever the caller sent.
+      guestExpiresAt:
+        input.role === 'guest' ? (input.guestExpiresAt ?? null) : input.role === 'installer' ? createdAt + INSTALLER_ACCESS_MS : null,
       guestZoneId: input.role === 'guest' ? (input.guestZoneId ?? null) : null,
       failedAttemptCount: 0,
       lockedUntil: null,
-      createdAt: Date.now(),
+      createdAt,
     };
     this.run(
       `INSERT INTO users
@@ -162,8 +180,16 @@ export class UserRepository extends Repository {
     return row ? toDomain(row) : undefined;
   }
 
+  /**
+   * Removes a user. The event log is append-only, so past events keep their row but lose the link to the user;
+   * the user's Home Assistant links go with them, which also revokes their tokens.
+   */
   delete(id: string): void {
-    this.run('DELETE FROM users WHERE id = ?', id);
+    this.transaction(() => {
+      this.run('UPDATE security_events SET source_user_id = NULL WHERE source_user_id = ?', id);
+      this.run('DELETE FROM ha_links WHERE user_id = ?', id);
+      this.run('DELETE FROM users WHERE id = ?', id);
+    })();
   }
 
   findByHaPersonId(haPersonId: string): User | undefined {
@@ -181,7 +207,12 @@ export class UserRepository extends Repository {
   ): User {
     const current = toDomain(this.getOrThrow(id));
     const next: User = { ...current, ...changes };
-    if (next.role !== 'guest') {
+    if (next.role === 'installer') {
+      next.guestZoneId = null;
+      if (current.role !== 'installer') {
+        next.guestExpiresAt = Date.now() + INSTALLER_ACCESS_MS;
+      }
+    } else if (next.role !== 'guest') {
       next.guestExpiresAt = null;
       next.guestZoneId = null;
     } else if (next.guestExpiresAt == null && next.guestZoneId == null) {
@@ -201,11 +232,50 @@ export class UserRepository extends Repository {
     return next;
   }
 
-  /** True when `code` already belongs to a user other than `exceptUserId` (login identifies by code). */
-  isCodeInUse(code: string, exceptUserId?: string): boolean {
+  /**
+   * True when `code` is already any user's code or duress code, other than `exceptUserId`'s own code
+   * (login identifies by code, so every code and duress code must be unique across the location).
+   * `exceptUserId` skips that user's code but not their duress code, so a duress code can't equal the same
+   * user's normal code.
+   */
+  isCodeInUse(code: string, exceptUserId?: string, options: { exceptDuressOf?: string } = {}): boolean {
     return this.all<UserRow>('SELECT * FROM users').some(
-      (row) => row.id !== exceptUserId && verifyCredential(code, row.credential_hash),
+      (row) =>
+        (row.id !== exceptUserId && verifyCredential(code, row.credential_hash)) ||
+        (row.id !== options.exceptDuressOf && row.duress_hash !== null && verifyCredential(code, row.duress_hash)),
     );
+  }
+
+  /** How many codes the location holds: every user's code plus every duress code. */
+  countCodes(): number {
+    return this.all<UserRow>('SELECT * FROM users').reduce(
+      (total, row) => total + (row.credential_hash !== NO_CODE ? 1 : 0) + (row.duress_hash !== null ? 1 : 0),
+      0,
+    );
+  }
+
+  /** The user whose duress code matches `code`, if any. */
+  findByDuressCode(code: string): User | undefined {
+    const match = this.all<UserRow>('SELECT * FROM users WHERE duress_hash IS NOT NULL').find(
+      (row) => row.duress_hash !== null && verifyCredential(code, row.duress_hash),
+    );
+    return match ? toDomain(match) : undefined;
+  }
+
+  /** Sets (or, with `null`, clears) the user's duress code. */
+  setDuressCode(id: string, code: string | null): void {
+    this.getOrThrow(id);
+    this.run('UPDATE users SET duress_hash = ? WHERE id = ?', code === null ? null : hashCredential(code), id);
+  }
+
+  /** Removes installers whose 48 h access has ended; returns them. */
+  deleteExpiredInstallers(now: number): User[] {
+    const expired = this.all<UserRow>(
+      "SELECT * FROM users WHERE role = 'installer' AND guest_expires_at IS NOT NULL AND guest_expires_at <= ?",
+      now,
+    ).map(toDomain);
+    expired.forEach((user) => this.delete(user.id));
+    return expired;
   }
 
   /** Sets (or, with `null`, clears) the user's code and resets failed attempts and any lockout. */

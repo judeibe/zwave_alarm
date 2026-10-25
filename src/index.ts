@@ -15,6 +15,7 @@ import { getDriver, getDriverState, onDriverStateChange, stopDriver } from './zw
 import { createShutdown } from './shutdown.js';
 import { AlarmPanelRepository } from './alarm/panel-repository.js';
 import { PanelService } from './alarm/panel-service.js';
+import { startInstallerExpirySweep } from './auth/installer-expiry.js';
 import { AlarmEventRepository } from './alarm/alarm-event-repository.js';
 import { AlarmEventService } from './alarm/alarm-event-service.js';
 import { SirenRepository } from './alarm/siren-repository.js';
@@ -60,6 +61,7 @@ const sirenRepo = new SirenRepository(db);
 // SIREN_NODE_ID only seeds the first base siren; afterwards sirens are managed with /api/v1/sirens.
 sirenRepo.seedBase(config.sirenNodeId);
 const panelService = new PanelService(panelRepo, eventRepo, { modeConfig: modeConfigRepo, sensorRepo, alarmEvents });
+startInstallerExpirySweep(userRepo);
 const lockoutService = new LockoutService(userRepo, lockoutPolicyRepo, eventRepo, panelService);
 
 const driver = getDriver();

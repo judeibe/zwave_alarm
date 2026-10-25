@@ -373,10 +373,10 @@ describe('POST /api/v1/panel/disarm as a guest', () => {
 
       const ok = await admin
         .post('/api/v1/users')
-        .send({ name: 'Nanny', role: 'guest', code: 'nanny1', guestZoneId: h.upstairs.id });
+        .send({ name: 'Nanny', role: 'guest', code: '3131', guestZoneId: h.upstairs.id });
       const unknown = await admin
         .post('/api/v1/users')
-        .send({ name: 'Ghost', role: 'guest', code: 'ghost1', guestZoneId: 'no-such-zone' });
+        .send({ name: 'Ghost', role: 'guest', code: '3232', guestZoneId: 'no-such-zone' });
 
       expect(ok.status).toBe(201);
       expect(ok.body.guestZoneId).toBe(h.upstairs.id);

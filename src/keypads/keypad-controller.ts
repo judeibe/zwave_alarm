@@ -2,7 +2,7 @@ import { createLogger } from '../config/logger.js';
 import type { AlarmPanel } from '../alarm/panel-repository.js';
 import { PanelStateError, type PanelService } from '../alarm/panel-service.js';
 import { CommandRejectedError } from '../alarm/dispatcher.js';
-import type { User, UserRepository } from '../auth/user-repository.js';
+import { isExpired, type User, type UserRepository } from '../auth/user-repository.js';
 import type { LockoutService } from '../auth/lockout-service.js';
 import type { EventRepository } from '../events/event-repository.js';
 import type { ZoneRepository } from '../db/repositories/zone-repository.js';
@@ -63,8 +63,12 @@ export class KeypadController {
   private async handleInput({ nodeId, input }: KeypadInputEvent): Promise<void> {
     switch (input.kind) {
       case 'code_entered':
-        // Entering a code and pressing Enter is how a keypad disarms; with nothing to disarm it is a no-op.
-        if (this.panelService.getState().mode !== 'disarmed') {
+        // Entering a code and pressing Enter is how a keypad disarms; with nothing to disarm it is a no-op,
+        // except for a duress code, which raises its silent alarm even when the panel is already disarmed.
+        if (
+          this.panelService.getState().mode !== 'disarmed' ||
+          (input.code !== undefined && this.userRepo.findByDuressCode(input.code) !== undefined)
+        ) {
           await this.disarm(nodeId, input.code);
         }
         return;
@@ -89,11 +93,12 @@ this.panelService.raiseEmergency(
   private async arm(nodeId: number, mode: 'armed_away' | 'armed_home', code: string | undefined): Promise<void> {
     let user: User | undefined;
     if (this.options.requireCodeToArm()) {
-      user = this.authenticate(code);
-      if (!user) {
-        await this.reject(nodeId, 'arm');
+      const auth = this.authenticate(code);
+      if (!auth || auth.duress) {
+        await this.reject(nodeId, 'arm'); // a duress code only disarms
         return;
       }
+      user = auth.user;
     }
     try {
       // The keypad's confirm-bypass prompt (the Gen1 check key) is not built yet, so until then a keypad arm
@@ -111,11 +116,12 @@ this.panelService.raiseEmergency(
   }
 
   private async disarm(nodeId: number, code: string | undefined): Promise<void> {
-    const user = this.authenticate(code);
-    if (!user) {
+    const auth = this.authenticate(code);
+    if (!auth) {
       await this.reject(nodeId, 'disarm');
       return;
     }
+    const { user, duress } = auth;
 
     try {
       if (user.role === 'guest') {
@@ -140,6 +146,10 @@ this.panelService.raiseEmergency(
         return;
       }
       await this.panelService.disarm({ source: 'native', sourceUserId: user.id, clearedBy: user.name });
+      if (duress) {
+        // Disarms visibly, then quietly requests the police (Ring spec, Access: duress code).
+        this.panelService.raiseDuress(`Duress code used by ${user.name} on keypad (node ${String(nodeId)})`);
+      }
     } catch (err) {
       if (!this.isExpectedRefusal(err)) throw err;
       logger.info('keypad disarm request refused', { nodeId, reason: err.message });
@@ -154,25 +164,27 @@ this.panelService.raiseEmergency(
    * to charge it to), unlike the REST disarm which already knows who is calling. A matching but
    * locked or expired user is refused like a wrong code.
    */
-  private authenticate(code: string | undefined): User | undefined {
+  private authenticate(code: string | undefined): { user: User; duress: boolean } | undefined {
     if (code === undefined) {
       return undefined;
     }
-    const user = this.userRepo.findByCode(code);
+    const normal = this.userRepo.findByCode(code);
+    const user = normal ?? this.userRepo.findByDuressCode(code);
     if (!user) {
       logger.warn('keypad code not recognised');
       return undefined;
     }
+    const duress = normal === undefined;
     if (this.lockoutService.isLocked(user)) {
       logger.warn('keypad code rejected: account locked', { userId: user.id });
       return undefined;
     }
-    if (user.role === 'guest' && user.guestExpiresAt !== null && user.guestExpiresAt <= this.now()) {
-      logger.warn('keypad code rejected: guest code expired', { userId: user.id });
+    if (isExpired(user, this.now())) {
+      logger.warn('keypad code rejected: access expired', { userId: user.id, role: user.role });
       return undefined;
     }
     this.userRepo.resetFailedAttempts(user.id);
-    return user;
+    return { user, duress };
   }
 
   private async reject(nodeId: number, action: 'arm' | 'disarm'): Promise<void> {
