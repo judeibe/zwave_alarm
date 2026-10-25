@@ -252,6 +252,24 @@ const MIGRATIONS: Migration[] = [
       CREATE UNIQUE INDEX idx_users_ha_person_id ON users(ha_person_id) WHERE ha_person_id IS NOT NULL;
     `,
   },
+  {
+    // Ring spec phase 4b: when a guest's code works at the keypad. No rows for a guest means unlimited access.
+    id: '012_guest_schedules',
+    sql: `
+      CREATE TABLE guest_schedules (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        name TEXT NOT NULL,
+        days TEXT NOT NULL,
+        all_day INTEGER NOT NULL CHECK (all_day IN (0, 1)),
+        start_time TEXT,
+        end_time TEXT,
+        time_zone TEXT,
+        created_at INTEGER NOT NULL
+      );
+      CREATE INDEX idx_guest_schedules_user_id ON guest_schedules(user_id);
+    `,
+  },
 ];
 
 function ensureMigrationsTable(db: Database.Database): void {

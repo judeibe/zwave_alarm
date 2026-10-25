@@ -11,6 +11,7 @@ import type { SensorRepository } from '../db/repositories/sensor-repository.js';
 import type { PanelService } from '../alarm/panel-service.js';
 import type { AlarmEventService } from '../alarm/alarm-event-service.js';
 import type { SirenRepository } from '../alarm/siren-repository.js';
+import type { GuestScheduleRepository } from '../auth/guest-schedule.js';
 import { createSirenRouter } from './routes/siren-routes.js';
 import type { EventRepository } from '../events/event-repository.js';
 import type { HaLinkRepository } from '../db/repositories/ha-link-repository.js';
@@ -107,6 +108,8 @@ export interface AppDeps {
   alarmEvents?: AlarmEventService;
   /** Optional: the siren routes (`/sirens`) are mounted only when supplied. */
   sirenRepo?: SirenRepository;
+  /** Optional: `/users/{id}/schedules` is mounted only when supplied. */
+  guestSchedules?: GuestScheduleRepository;
   haLinkRepo: HaLinkRepository;
   /** Optional: the keypad routes (`/keypads`) are mounted only when supplied. */
   keypadService?: KeypadService;
@@ -178,6 +181,7 @@ export function createApp(deps?: AppDeps): Express {
       lockoutService: deps.lockoutService,
       eventRepo: deps.eventRepo,
       alarmEvents: deps.alarmEvents,
+      guestSchedules: deps.guestSchedules,
       haLinkRepo: deps.haLinkRepo,
       driver: deps.driver,
       driverState: deps.driverState,

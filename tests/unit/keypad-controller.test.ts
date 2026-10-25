@@ -1,3 +1,4 @@
+import { GuestScheduleRepository, type Weekday } from '../../src/auth/guest-schedule.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CommandClasses } from '@zwave-js/core';
 import { createDatabase } from '../../src/db/schema.js';
@@ -47,13 +48,15 @@ function build(options: { requireCodeToArm?: boolean } = {}) {
     return Promise.resolve();
   });
   keypads.add(NODE, ringKeypadV2Adapter);
+  const schedules = new GuestScheduleRepository(db);
   new KeypadController(keypads, panelService, userRepo, lockoutService, eventRepo, zoneRepo, {
     requireCodeToArm: () => setting.requireCodeToArm,
+    guestSchedules: schedules,
   }).start();
   writes.length = 0; // drop the sync-on-add indication; tests look at what happens afterwards
 
   const wrote = (...expected: unknown[]) => writes.some((entry) => JSON.stringify(entry.writes) === JSON.stringify(expected));
-  return { panelService, keypads, userRepo, zoneRepo, eventRepo, writes, wrote, setting };
+  return { panelService, keypads, userRepo, zoneRepo, eventRepo, writes, wrote, setting, schedules };
 }
 
 /** `arm()` resolves once the exit delay has started, so wait for the armed mode to actually be committed. */
@@ -133,6 +136,26 @@ describe('KeypadController', () => {
       await new Promise((resolve) => setTimeout(resolve, 100));
 
       expect(panelService.getState().mode).toBe('armed_away');
+    });
+
+    it('refuses a guest outside their schedule and tells the owner, but lets them in inside it', async () => {
+      const { panelService, keypads, userRepo, eventRepo, schedules } = build();
+      const guest = userRepo.create({ name: 'Sitter', role: 'guest', code: '3333', guestExpiresAt: Date.now() + 1e9 });
+      const today = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'][new Date().getDay()] as Weekday;
+      const otherDay = (['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'] as Weekday[]).find((day) => day !== today)!;
+      const schedule = schedules.create(guest.id, { name: 'Other day', days: [otherDay], allDay: true, start: null, end: null, timeZone: null });
+      await armPanel(panelService, 'armed_away');
+
+      keypads.receive(NODE, entryControl(2, '3333'));
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(panelService.getState().mode).toBe('armed_away');
+      expect(
+        eventRepo.list().some((event) => event.type === 'guest_code_used' && event.details?.includes('outside their schedule')),
+      ).toBe(true);
+
+      schedules.update({ ...schedule, days: [today] });
+      keypads.receive(NODE, entryControl(2, '3333'));
+      await vi.waitFor(() => expect(panelService.getState().mode).toBe('disarmed'));
     });
 
     it('lets a zone-restricted guest disarm only their zone, and records the guest code use', async () => {
