@@ -195,7 +195,7 @@ export class SensorMapper extends EventEmitter {
 
   /**
    * Persists a tamper transition. Tamper clears only when the device reports the cover back (Ring spec,
-   * Health monitoring). On the ok->tampered edge it is recorded as a `device_fault` and, while the panel is
+   * Health monitoring). Both edges are recorded as `tamper` / `tamper_cleared` history events and, while the panel is
    * armed, raises a BURGLARY; the `sensor_fault` event carries the new `tampered` flag either way.
    */
   private applyTamper(sensor: SensorDevice, tampered: boolean): void {
@@ -204,8 +204,15 @@ export class SensorMapper extends EventEmitter {
     }
     const updated = this.sensorRepo.updateState(sensor.id, { tampered });
     this.emit('sensor_fault', updated);
+    logger.warn(tampered ? 'sensor tampered' : 'sensor tamper cleared', { sensorId: sensor.id, zoneId: sensor.zoneId });
+    this.eventRepo.record({
+      type: tampered ? 'tamper' : 'tamper_cleared',
+      source: 'system',
+      relatedZoneId: sensor.zoneId,
+      relatedSensorId: sensor.id,
+      details: tampered ? 'Cover removed or product moved' : 'Cover back in place',
+    });
     if (tampered) {
-      this.recordFault(updated, 'tamper');
       this.panelService.reportSensorTamper(updated);
     }
   }

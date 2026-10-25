@@ -12,6 +12,8 @@ import type { PanelService } from '../alarm/panel-service.js';
 import type { AlarmEventService } from '../alarm/alarm-event-service.js';
 import type { SirenRepository } from '../alarm/siren-repository.js';
 import type { GuestScheduleRepository } from '../auth/guest-schedule.js';
+import type { ModeScheduleRepository } from '../alarm/mode-schedule.js';
+import { createModeScheduleRouter } from './routes/mode-schedule-routes.js';
 import { createSirenRouter } from './routes/siren-routes.js';
 import type { EventRepository } from '../events/event-repository.js';
 import type { HaLinkRepository } from '../db/repositories/ha-link-repository.js';
@@ -110,6 +112,8 @@ export interface AppDeps {
   sirenRepo?: SirenRepository;
   /** Optional: `/users/{id}/schedules` is mounted only when supplied. */
   guestSchedules?: GuestScheduleRepository;
+  /** Optional: `/mode-schedules` is mounted only when supplied. */
+  modeSchedules?: ModeScheduleRepository;
   haLinkRepo: HaLinkRepository;
   /** Optional: the keypad routes (`/keypads`) are mounted only when supplied. */
   keypadService?: KeypadService;
@@ -198,6 +202,9 @@ export function createApp(deps?: AppDeps): Express {
     }
     if (deps.lockService) {
       app.use('/api/v1', createLockRouter({ lockService: deps.lockService }));
+    }
+    if (deps.modeSchedules) {
+      app.use('/api/v1', createModeScheduleRouter({ modeSchedules: deps.modeSchedules, eventRepo: deps.eventRepo }));
     }
     if (deps.sirenRepo) {
       app.use('/api/v1', createSirenRouter({ sirenRepo: deps.sirenRepo, driver: deps.driver }));

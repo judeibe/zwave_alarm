@@ -2,18 +2,38 @@ import type Database from 'better-sqlite3';
 import { randomUUID } from 'node:crypto';
 import { Repository } from '../db/repository.js';
 
-export type SecurityEventType =
-  | 'armed'
-  | 'disarmed'
-  | 'breach'
-  | 'alarm_triggered'
-  | 'alarm_cleared'
-  | 'device_fault'
-  | 'lockout'
-  | 'guest_code_used';
+export const SECURITY_EVENT_TYPES = [
+  'armed',
+  'disarmed',
+  'breach',
+  'alarm_triggered',
+  'alarm_cleared',
+  'device_fault',
+  'lockout',
+  'guest_code_used',
+  // History kinds added in phase 5 (Ring spec, HistoryEvent):
+  'bypassed',
+  'tamper',
+  'tamper_cleared',
+  'siren_silenced',
+  'code_added',
+  'code_changed',
+  'code_removed',
+  'duress_code_set',
+  'duress_code_removed',
+  'guest_schedule_added',
+  'guest_schedule_updated',
+  'guest_schedule_removed',
+  'mode_schedule_added',
+  'mode_schedule_updated',
+  'mode_schedule_removed',
+  'mode_schedule_applied',
+  'mode_schedule_skipped',
+] as const;
+export type SecurityEventType = (typeof SECURITY_EVENT_TYPES)[number];
 export type SecurityEventSource = 'user' | 'home_assistant' | 'system';
 
-/** data-model.md's SecurityEvent entity — an append-only log (FR-011). */
+/** The spec's HistoryEvent: an append-only log of who did what to which device (FR-011). */
 export interface SecurityEvent {
   id: string;
   type: SecurityEventType;
@@ -23,6 +43,11 @@ export interface SecurityEvent {
   relatedSensorId: string | null;
   details: string | null;
   occurredAt: number;
+  /** Display name of who did it: a user, "Home Assistant", "Schedule: <name>" or "System". */
+  actor: string | null;
+  /** The device concerned: a sensor id, or `node-<n>` for a lock, siren or keypad. Survives deleting the device. */
+  deviceId: string | null;
+  deviceName: string | null;
 }
 
 export interface RecordSecurityEventInput {
@@ -32,14 +57,31 @@ export interface RecordSecurityEventInput {
   relatedZoneId?: string | null;
   relatedSensorId?: string | null;
   details?: string | null;
+  /** Defaults to the user's name, "Home Assistant" or "System", from `sourceUserId` / `source`. */
+  actor?: string | null;
+  /** Defaults to `relatedSensorId`. */
+  deviceId?: string | null;
+  /** Defaults to the sensor's name when `deviceId` is a sensor. */
+  deviceName?: string | null;
 }
 
 export interface ListSecurityEventsOptions {
   /** Only return events at or after this timestamp (epoch ms). */
   since?: number;
-  /** Caps the number of rows returned. */
+  /** Only return events before this timestamp (epoch ms). */
+  until?: number;
+  /** Only these event types. */
+  types?: SecurityEventType[];
+  deviceId?: string;
+  /** Only events caused by this user. */
+  userId?: string;
+  /** Paging cursor: an event id; returns only events older than it. */
+  before?: string;
+  /** Caps the number of rows returned (default and maximum 500). */
   limit?: number;
 }
+
+export const MAX_EVENT_PAGE = 500;
 
 interface SecurityEventRow {
   id: string;
@@ -50,6 +92,9 @@ interface SecurityEventRow {
   related_sensor_id: string | null;
   details: string | null;
   occurred_at: number;
+  actor: string | null;
+  device_id: string | null;
+  device_name: string | null;
 }
 
 function toDomain(row: SecurityEventRow): SecurityEvent {
@@ -62,6 +107,9 @@ function toDomain(row: SecurityEventRow): SecurityEvent {
     relatedSensorId: row.related_sensor_id,
     details: row.details,
     occurredAt: row.occurred_at,
+    actor: row.actor,
+    deviceId: row.device_id,
+    deviceName: row.device_name,
   };
 }
 
@@ -79,22 +127,32 @@ export class EventRepository extends Repository {
     super(db);
   }
 
-  /** Appends a new SecurityEvent, stamping `occurredAt` with the current time. */
+  /** Appends a new SecurityEvent, stamping `occurredAt` with the current time and filling actor and device names. */
   record(input: RecordSecurityEventInput): SecurityEvent {
+    if (!(SECURITY_EVENT_TYPES as readonly string[]).includes(input.type)) {
+      throw new Error(`unknown security event type "${input.type}"`);
+    }
+    const sourceUserId = input.sourceUserId ?? null;
+    const relatedSensorId = input.relatedSensorId ?? null;
+    const deviceId = input.deviceId ?? relatedSensorId;
     const event: SecurityEvent = {
       id: randomUUID(),
       type: input.type,
       source: input.source,
-      sourceUserId: input.sourceUserId ?? null,
+      sourceUserId,
       relatedZoneId: input.relatedZoneId ?? null,
-      relatedSensorId: input.relatedSensorId ?? null,
+      relatedSensorId,
       details: input.details ?? null,
       occurredAt: Date.now(),
+      actor: input.actor ?? this.defaultActor(input.source, sourceUserId),
+      deviceId,
+      deviceName: input.deviceName ?? this.defaultDeviceName(deviceId),
     };
     this.run(
       `INSERT INTO security_events
-         (id, type, source, source_user_id, related_zone_id, related_sensor_id, details, occurred_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+         (id, type, source, source_user_id, related_zone_id, related_sensor_id, details, occurred_at,
+          actor, device_id, device_name)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       event.id,
       event.type,
       event.source,
@@ -103,9 +161,29 @@ export class EventRepository extends Repository {
       event.relatedSensorId,
       event.details,
       event.occurredAt,
+      event.actor,
+      event.deviceId,
+      event.deviceName,
     );
     this.emit('event_recorded', event);
     return event;
+  }
+
+  private defaultActor(source: SecurityEventSource, userId: string | null): string | null {
+    if (userId !== null) {
+      const user = this.get<{ name: string }>('SELECT name FROM users WHERE id = ?', userId);
+      if (user) {
+        return user.name;
+      }
+    }
+    return source === 'home_assistant' ? 'Home Assistant' : source === 'system' ? 'System' : null;
+  }
+
+  private defaultDeviceName(deviceId: string | null): string | null {
+    if (deviceId === null) {
+      return null;
+    }
+    return this.get<{ name: string }>('SELECT name FROM sensor_devices WHERE id = ?', deviceId)?.name ?? null;
   }
 
   /** Looks up a single SecurityEvent by id (e.g. resolving AlarmPanel.triggeredBy's related zone/sensor). */
@@ -114,26 +192,53 @@ export class EventRepository extends Repository {
     return row ? toDomain(row) : undefined;
   }
 
-  /** Returns events newest-first, optionally filtered to `occurredAt >= since` and capped at `limit` rows. */
+  /**
+   * Returns events newest-first, optionally filtered, and capped at `limit` (default and maximum 500). Page by
+   * passing the last event's id as `before`.
+   */
   list(options: ListSecurityEventsOptions = {}): SecurityEvent[] {
-    const { since, limit } = options;
     const clauses: string[] = [];
     const params: unknown[] = [];
 
-    if (since !== undefined) {
+    if (options.since !== undefined) {
       clauses.push('occurred_at >= ?');
-      params.push(since);
+      params.push(options.since);
+    }
+    if (options.until !== undefined) {
+      clauses.push('occurred_at < ?');
+      params.push(options.until);
+    }
+    if (options.types && options.types.length > 0) {
+      clauses.push(`type IN (${options.types.map(() => '?').join(', ')})`);
+      params.push(...options.types);
+    }
+    if (options.deviceId !== undefined) {
+      clauses.push('device_id = ?');
+      params.push(options.deviceId);
+    }
+    if (options.userId !== undefined) {
+      clauses.push('source_user_id = ?');
+      params.push(options.userId);
+    }
+    if (options.before !== undefined) {
+      const cursor = this.get<{ occurred_at: number; rid: number }>(
+        'SELECT occurred_at, rowid AS rid FROM security_events WHERE id = ?',
+        options.before,
+      );
+      if (cursor) {
+        clauses.push('(occurred_at < ? OR (occurred_at = ? AND rowid < ?))');
+        params.push(cursor.occurred_at, cursor.occurred_at, cursor.rid);
+      } else {
+        return []; // an unknown cursor pages past everything
+      }
     }
 
     let sql = 'SELECT * FROM security_events';
     if (clauses.length > 0) {
       sql += ` WHERE ${clauses.join(' AND ')}`;
     }
-    sql += ' ORDER BY occurred_at DESC';
-    if (limit !== undefined) {
-      sql += ' LIMIT ?';
-      params.push(limit);
-    }
+    sql += ' ORDER BY occurred_at DESC, rowid DESC LIMIT ?';
+    params.push(Math.min(options.limit ?? MAX_EVENT_PAGE, MAX_EVENT_PAGE));
 
     return this.all<SecurityEventRow>(sql, ...params).map(toDomain);
   }

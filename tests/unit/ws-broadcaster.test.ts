@@ -223,7 +223,15 @@ describe('ws-broadcaster', () => {
     const message = await nextMessage(1);
     expect(message).toEqual({
       type: 'event.recorded',
-      event: { id: event.id, type: 'lockout', occurredAt: event.occurredAt, details: null },
+      event: {
+        id: event.id,
+        type: 'lockout',
+        occurredAt: event.occurredAt,
+        details: null,
+        actor: 'System',
+        deviceId: null,
+        deviceName: null,
+      },
     });
   });
 
@@ -241,7 +249,15 @@ describe('ws-broadcaster', () => {
     const message = await nextMessage(1);
     expect(message).toEqual({
       type: 'event.recorded',
-      event: { id: event.id, type: 'alarm_cleared', occurredAt: event.occurredAt, details: 'Cleared by Alice' },
+      event: {
+        id: event.id,
+        type: 'alarm_cleared',
+        occurredAt: event.occurredAt,
+        details: 'Cleared by Alice',
+        actor: null,
+        deviceId: null,
+        deviceName: null,
+      },
     });
   });
 

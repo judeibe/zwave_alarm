@@ -76,6 +76,13 @@ function localParts(at: number, timeZone: string | null): { day: number; minutes
   return { day, minutes: Number(get('hour')) * 60 + Number(get('minute')) };
 }
 
+/** The weekday and `HH:MM` wall-clock time of `at` in `timeZone` (the server's own zone when null). */
+export function localClock(at: number, timeZone: string | null): { weekday: Weekday; time: string } {
+  const { day, minutes } = localParts(at, timeZone);
+  const pad = (value: number): string => String(value).padStart(2, '0');
+  return { weekday: WEEKDAYS[day], time: `${pad(Math.floor(minutes / 60))}:${pad(minutes % 60)}` };
+}
+
 /** Whether `at` falls inside this schedule's window. */
 export function scheduleCovers(schedule: GuestSchedule, at: number): boolean {
   const { day, minutes } = localParts(at, schedule.timeZone);

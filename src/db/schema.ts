@@ -270,6 +270,61 @@ const MIGRATIONS: Migration[] = [
       CREATE INDEX idx_guest_schedules_user_id ON guest_schedules(user_id);
     `,
   },
+  {
+    // Ring spec phase 5: the history log gains an actor and a device, and many more event kinds. SQLite cannot
+    // drop the CHECK on `type`, so `security_events` is rebuilt (kinds are validated in code from now on).
+    id: '013_history_fields',
+    foreignKeysOff: true,
+    sql: `
+      CREATE TABLE security_events_new (
+        id TEXT PRIMARY KEY,
+        type TEXT NOT NULL,
+        source TEXT NOT NULL CHECK (source IN ('user', 'home_assistant', 'system')),
+        source_user_id TEXT REFERENCES users(id),
+        related_zone_id TEXT REFERENCES zones(id),
+        related_sensor_id TEXT REFERENCES sensor_devices(id),
+        details TEXT,
+        occurred_at INTEGER NOT NULL,
+        actor TEXT,
+        device_id TEXT,
+        device_name TEXT
+      );
+      INSERT INTO security_events_new
+        (id, type, source, source_user_id, related_zone_id, related_sensor_id, details, occurred_at,
+         actor, device_id, device_name)
+        SELECT e.id, e.type, e.source, e.source_user_id, e.related_zone_id, e.related_sensor_id, e.details,
+               e.occurred_at,
+               COALESCE(
+                 (SELECT name FROM users WHERE id = e.source_user_id),
+                 CASE e.source WHEN 'home_assistant' THEN 'Home Assistant' WHEN 'system' THEN 'System' END
+               ),
+               e.related_sensor_id,
+               (SELECT name FROM sensor_devices WHERE id = e.related_sensor_id)
+        FROM security_events e
+        ORDER BY e.rowid;
+      DROP TABLE security_events;
+      ALTER TABLE security_events_new RENAME TO security_events;
+      CREATE INDEX idx_security_events_occurred_at ON security_events(occurred_at);
+      CREATE INDEX idx_security_events_device_id ON security_events(device_id);
+    `,
+  },
+  {
+    // Owner-defined schedules that arm or disarm the panel at a time of day (Ring spec, Arming).
+    id: '014_mode_schedules',
+    sql: `
+      CREATE TABLE mode_schedules (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        mode TEXT NOT NULL CHECK (mode IN ('disarmed', 'armed_home', 'armed_away')),
+        time_of_day TEXT NOT NULL,
+        days TEXT NOT NULL,
+        enabled INTEGER NOT NULL CHECK (enabled IN (0, 1)),
+        time_zone TEXT,
+        created_at INTEGER NOT NULL,
+        last_run_at INTEGER
+      );
+    `,
+  },
 ];
 
 function ensureMigrationsTable(db: Database.Database): void {

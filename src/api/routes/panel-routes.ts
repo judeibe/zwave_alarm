@@ -1,5 +1,6 @@
 import { Router, type Request } from 'express';
 import { ApiError } from '../app.js';
+import { callerIdentity } from '../actor.js';
 import { asyncHandler } from '../async-handler.js';
 import {
   alarmEventsQuerySchema,
@@ -108,9 +109,9 @@ export function createPanelRouter({
   );
 
   // Mutes the siren but leaves the alarm active and monitoring running. 409 when nothing is sounding.
-  router.post('/panel/silence', requireAuth, requireRole('administrator', 'member', 'installer'), (_req, res) => {
+  router.post('/panel/silence', requireAuth, requireRole('administrator', 'member', 'installer'), (req, res) => {
     try {
-      res.status(200).json({ silenced: panelService.silence() });
+      res.status(200).json({ silenced: panelService.silence(callerIdentity(req)) });
     } catch (err) {
       if (err instanceof PanelStateError) {
         throw new ApiError(409, 'conflict', err.message);

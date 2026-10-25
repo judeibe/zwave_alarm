@@ -6,6 +6,7 @@ import {
   OUTDOOR_MIN_DURATION_SEC,
   SIREN_KINDS,
 } from '../alarm/siren-repository.js';
+import { MAX_EVENT_PAGE, SECURITY_EVENT_TYPES } from '../events/event-repository.js';
 import { isValidTimeZone, WEEKDAYS } from '../auth/guest-schedule.js';
 import { SENSOR_PLACEMENTS } from '../db/repositories/sensor-repository.js';
 import { MODE_DELAY_MAX_SEC, MODE_DELAY_MIN_SEC } from '../db/repositories/mode-config-repository.js';
@@ -194,6 +195,27 @@ export const updateScheduleBodySchema = z
   .partial()
   .refine(nonEmpty, NON_EMPTY_MESSAGE);
 
+const scheduledMode = z.enum(['disarmed', 'armed_home', 'armed_away']);
+
+/**
+ * `POST /api/v1/mode-schedules` body: set the panel to `mode` at `time` (`HH:MM`) on `days`, in `timeZone`
+ * (an IANA name; null or omitted means the server's own zone). Enabled unless said otherwise.
+ */
+export const createModeScheduleBodySchema = z.object({
+  name,
+  mode: scheduledMode,
+  time: clockTime,
+  days: weekdays,
+  enabled: z.boolean().optional(),
+  timeZone: timeZone.nullable().optional(),
+});
+
+/** `PATCH /api/v1/mode-schedules/{id}` body: any field above; send only `enabled` to toggle it. */
+export const updateModeScheduleBodySchema = z
+  .object({ name, mode: scheduledMode, time: clockTime, days: weekdays, enabled: z.boolean(), timeZone: timeZone.nullable() })
+  .partial()
+  .refine(nonEmpty, NON_EMPTY_MESSAGE);
+
 /** `GET /api/v1/users` query string. */
 export const usersQuerySchema = z.object({ haPersonId: haId.optional() });
 
@@ -223,10 +245,28 @@ export const keypadSettingsUpdateSchema = z
 // `z.coerce.number()` alone would turn an empty `?since=` into 0, so require a non-empty string
 // first; `z.number()` then rejects the NaN that a non-numeric string converts to.
 const numericString = z.string().min(1, 'must not be empty').transform(Number);
-export const eventsQuerySchema = z.object({
-  since: numericString.pipe(z.number()).optional(),
-  limit: numericString.pipe(z.number().int().positive()).optional(),
-});
+const eventTypes = z
+  .string()
+  .min(1, 'must not be empty')
+  .transform((value) => value.split(',').map((type) => type.trim()))
+  .pipe(z.array(z.enum(SECURITY_EVENT_TYPES)).min(1));
+const queryId = z.string().min(1).max(200);
+
+/**
+ * `GET /api/v1/events` query string. `type` is a comma-separated list of event types; `before` is an event id
+ * (a paging cursor); `limit` is 1-500. The parsed result is `ListSecurityEventsOptions` (`type` becomes `types`).
+ */
+export const eventsQuerySchema = z
+  .object({
+    since: numericString.pipe(z.number()).optional(),
+    until: numericString.pipe(z.number()).optional(),
+    limit: numericString.pipe(z.number().int().min(1).max(MAX_EVENT_PAGE)).optional(),
+    type: eventTypes.optional(),
+    deviceId: queryId.optional(),
+    userId: queryId.optional(),
+    before: queryId.optional(),
+  })
+  .transform(({ type, ...rest }) => ({ ...rest, ...(type !== undefined && { types: type }) }));
 
 function describeIssues(error: z.ZodError): string {
   return error.issues
