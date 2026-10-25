@@ -14,7 +14,7 @@ import {
 import { requireAuth, requireRole } from '../../auth/authorize.js';
 import type { UserRepository } from '../../auth/user-repository.js';
 import type { ZoneRepository } from '../../db/repositories/zone-repository.js';
-import type { SensorCategory, SensorPlacement, SensorRepository } from '../../db/repositories/sensor-repository.js';
+import type { SensorAlarmKind, SensorCategory, SensorPlacement, SensorRepository } from '../../db/repositories/sensor-repository.js';
 
 export interface ZoneRouteDeps {
   zoneRepo: ZoneRepository;
@@ -40,6 +40,7 @@ interface AssignSensorBody {
   placement?: SensorPlacement;
   armed?: { home?: boolean; away?: boolean };
   alertsOnly?: boolean;
+  alarmKind?: SensorAlarmKind;
 }
 
 /**
@@ -145,6 +146,7 @@ export function createZoneRouter({ zoneRepo, sensorRepo, userRepo, driver }: Zon
         zoneId?: string;
         placement?: SensorPlacement;
         alertsOnly?: boolean;
+        alarmKind?: SensorAlarmKind;
         armed?: { home?: boolean; away?: boolean };
       };
       const existing = sensorRepo.findById(req.params.sensorId);
@@ -153,6 +155,9 @@ export function createZoneRouter({ zoneRepo, sensorRepo, userRepo, driver }: Zon
       }
       if (rest.placement !== undefined && (rest.category ?? existing.category) === 'life-safety') {
         throw new ApiError(400, 'bad_request', 'Life-safety sensors have no placement.');
+      }
+      if (rest.alarmKind !== undefined && (rest.category ?? existing.category) !== 'life-safety') {
+        throw new ApiError(400, 'bad_request', 'Only life-safety sensors have an alarmKind.');
       }
       const changes = {
         ...rest,
@@ -180,7 +185,7 @@ export function createZoneRouter({ zoneRepo, sensorRepo, userRepo, driver }: Zon
     requireRole('administrator'),
     validateBody(assignSensorBodySchema),
     (req, res) => {
-      const { zwaveNodeId, name, category, placement, armed, alertsOnly } = req.body as AssignSensorBody;
+      const { zwaveNodeId, name, category, placement, armed, alertsOnly, alarmKind } = req.body as AssignSensorBody;
 
       let nodeIsKnown: boolean;
       try {
@@ -205,6 +210,7 @@ export function createZoneRouter({ zoneRepo, sensorRepo, userRepo, driver }: Zon
           armedHome: armed?.home,
           armedAway: armed?.away,
           alertsOnly,
+          alarmKind,
         });
         res.status(201).json(sensor);
       } catch (err) {

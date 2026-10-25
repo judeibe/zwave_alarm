@@ -1,7 +1,16 @@
 import { Router, type Request } from 'express';
 import { ApiError } from '../app.js';
 import { asyncHandler } from '../async-handler.js';
-import { armBodySchema, codeBodySchema, updateModesBodySchema, validateBody } from '../validation.js';
+import {
+  alarmEventsQuerySchema,
+  armBodySchema,
+  codeBodySchema,
+  panicBodySchema,
+  parsedQuery,
+  updateModesBodySchema,
+  validateBody,
+  validateQuery,
+} from '../validation.js';
 import { isAuthRequired, requireAuth, requireRole } from '../../auth/authorize.js';
 import { CommandRejectedError, type CommandSource } from '../../alarm/dispatcher.js';
 import {
@@ -14,6 +23,8 @@ import {
 } from '../../alarm/panel-service.js';
 import { verifyCredential, type UserRepository } from '../../auth/user-repository.js';
 import type { LockoutService } from '../../auth/lockout-service.js';
+import type { AlarmEventService } from '../../alarm/alarm-event-service.js';
+import type { EmergencyService } from '../../alarm/alarm-event-repository.js';
 import type { EventRepository } from '../../events/event-repository.js';
 import type { ZoneRepository } from '../../db/repositories/zone-repository.js';
 import type { DriverState } from '../../zwave/driver.js';
@@ -24,6 +35,8 @@ export interface PanelRouteDeps {
   lockoutService: LockoutService;
   eventRepo: EventRepository;
   zoneRepo: ZoneRepository;
+  /** Serves `GET /alarm-events`; omitted in tests that don't model alarm events. */
+  alarmEvents?: AlarmEventService;
   /** Supplies the `driver` field of `GET /panel`; omitted in tests that don't model the Z-Wave driver. */
   driverState?: () => DriverState;
 }
@@ -59,6 +72,7 @@ export function createPanelRouter({
   lockoutService,
   eventRepo,
   zoneRepo,
+  alarmEvents,
   driverState,
 }: PanelRouteDeps): Router {
   const router = Router();
@@ -69,6 +83,48 @@ export function createPanelRouter({
     const body = { ...panel, modes: panelService.getModes() };
     res.status(200).json(driverState ? { ...body, driver: driverState() } : body);
   });
+
+  // The app's panic / fire / medical / SOS buttons. Allowed in every mode, never gated by arming state.
+  router.post(
+    '/panel/panic',
+    requireAuth,
+    requireRole('administrator', 'member'),
+    validateBody(panicBodySchema),
+    (req, res) => {
+      const { type, service } = req.body as { type: 'PANIC' | 'FIRE' | 'MEDICAL' | 'SOS'; service?: EmergencyService };
+      try {
+        res.status(201).json(panelService.raiseEmergency(type, { service, details: `${type} requested from the app` }));
+      } catch (err) {
+        if (err instanceof PanelStateError) {
+          throw new ApiError(503, 'unavailable', err.message);
+        }
+        throw err;
+      }
+    },
+  );
+
+  // Mutes the siren but leaves the alarm active and monitoring running. 409 when nothing is sounding.
+  router.post('/panel/silence', requireAuth, requireRole('administrator', 'member'), (_req, res) => {
+    try {
+      res.status(200).json({ silenced: panelService.silence() });
+    } catch (err) {
+      if (err instanceof PanelStateError) {
+        throw new ApiError(409, 'conflict', err.message);
+      }
+      throw err;
+    }
+  });
+
+  router.get(
+    '/alarm-events',
+    requireAuth,
+    requireRole('administrator', 'member'),
+    validateQuery(alarmEventsQuerySchema),
+    (_req, res) => {
+      const { active, limit } = parsedQuery<{ active?: 'true' | 'false'; limit?: number }>(res);
+      res.status(200).json(alarmEvents?.list({ activeOnly: active === 'true', limit }) ?? []);
+    },
+  );
 
   // Per-mode entry/exit delay (0-180 s). Keyed by armed mode: { armed_home: { entryDelaySec, exitDelaySec }, armed_away: {...} }.
   router.get('/modes', requireAuth, requireRole('administrator', 'member'), (_req, res) => {

@@ -41,6 +41,7 @@ export const updateZoneBodySchema = z
   .refine(nonEmpty, NON_EMPTY_MESSAGE);
 
 const placement = z.enum(SENSOR_PLACEMENTS);
+const alarmKind = z.enum(['SMOKE', 'CO', 'FLOOD_FREEZE']);
 const armedFlags = z.object({ home: z.boolean(), away: z.boolean() }).partial().refine(nonEmpty, NON_EMPTY_MESSAGE);
 
 /**
@@ -48,7 +49,7 @@ const armedFlags = z.object({ home: z.boolean(), away: z.boolean() }).partial().
  * intrusion sensors only (the route rejects it for life-safety).
  */
 export const updateSensorBodySchema = z
-  .object({ name, category: z.enum(['intrusion', 'life-safety']), zoneId: z.string().min(1), placement, armed: armedFlags, alertsOnly: z.boolean() })
+  .object({ name, category: z.enum(['intrusion', 'life-safety']), zoneId: z.string().min(1), placement, armed: armedFlags, alertsOnly: z.boolean(), alarmKind })
   .partial()
   .refine(nonEmpty, NON_EMPTY_MESSAGE);
 
@@ -60,6 +61,22 @@ export const assignSensorBodySchema = z.object({
   placement: placement.optional(),
   armed: armedFlags.optional(),
   alertsOnly: z.boolean().optional(),
+  alarmKind: alarmKind.optional(),
+});
+
+/**
+ * `POST /api/v1/panel/panic` body: the app's panic / fire / medical / SOS buttons. `service` only matters for
+ * `SOS`, where it picks who is requested (default `police`).
+ */
+export const panicBodySchema = z.object({
+  type: z.enum(['PANIC', 'FIRE', 'MEDICAL', 'SOS']),
+  service: z.enum(['police', 'fire', 'medical']).optional(),
+});
+
+/** `GET /api/v1/alarm-events` query string. */
+export const alarmEventsQuerySchema = z.object({
+  active: z.enum(['true', 'false']).optional(),
+  limit: z.coerce.number().int().min(1).max(200).optional(),
 });
 
 const delaySeconds = z.number().int().min(MODE_DELAY_MIN_SEC).max(MODE_DELAY_MAX_SEC);

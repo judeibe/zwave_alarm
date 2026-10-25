@@ -9,6 +9,7 @@ import type { UserRepository } from '../auth/user-repository.js';
 import type { ZoneRepository } from '../db/repositories/zone-repository.js';
 import type { SensorRepository } from '../db/repositories/sensor-repository.js';
 import type { PanelService } from '../alarm/panel-service.js';
+import type { AlarmEventService } from '../alarm/alarm-event-service.js';
 import type { EventRepository } from '../events/event-repository.js';
 import type { HaLinkRepository } from '../db/repositories/ha-link-repository.js';
 import type { DriverState } from '../zwave/driver.js';
@@ -100,6 +101,8 @@ export interface AppDeps {
   sensorRepo: SensorRepository;
   lockoutService: LockoutService;
   eventRepo: EventRepository;
+  /** Serves `GET /api/v1/alarm-events`. */
+  alarmEvents?: AlarmEventService;
   haLinkRepo: HaLinkRepository;
   /** Optional: the keypad routes (`/keypads`) are mounted only when supplied. */
   keypadService?: KeypadService;
@@ -170,6 +173,7 @@ export function createApp(deps?: AppDeps): Express {
       sensorRepo: deps.sensorRepo,
       lockoutService: deps.lockoutService,
       eventRepo: deps.eventRepo,
+      alarmEvents: deps.alarmEvents,
       haLinkRepo: deps.haLinkRepo,
       driver: deps.driver,
       driverState: deps.driverState,

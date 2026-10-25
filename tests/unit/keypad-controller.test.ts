@@ -219,7 +219,13 @@ describe('KeypadController', () => {
 
       keypads.receive(NODE, entryControl(eventType));
 
-      await vi.waitFor(() => expect(panelService.getState().mode).toBe('alarm_triggered'));
+      // Medical is silent (Ring spec, Sirens): it is recorded but does not put the panel into alarm.
+      if (emergency === 'medical') {
+        await vi.waitFor(() => expect(eventRepo.list().some((event) => event.type === 'alarm_triggered')).toBe(true));
+        expect(panelService.getState().mode).toBe('disarmed');
+      } else {
+        await vi.waitFor(() => expect(panelService.getState().mode).toBe('alarm_triggered'));
+      }
       expect(eventRepo.list().find((event) => event.type === 'alarm_triggered')?.details).toContain(emergency);
     });
   });

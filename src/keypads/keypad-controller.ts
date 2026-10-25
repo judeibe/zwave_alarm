@@ -76,7 +76,10 @@ export class KeypadController {
         await this.arm(nodeId, input.kind === 'arm_away' ? 'armed_away' : 'armed_home', input.code);
         return;
       case 'emergency':
-        this.panelService.triggerAlarm({ details: `${input.emergency} button pressed on keypad (node ${String(nodeId)})` });
+this.panelService.raiseEmergency(
+          input.emergency === 'fire' ? 'FIRE' : input.emergency === 'medical' ? 'MEDICAL' : 'PANIC',
+          { details: `${input.emergency} button pressed on keypad (node ${String(nodeId)})` },
+        );
         return;
       case 'cancel':
         return;
