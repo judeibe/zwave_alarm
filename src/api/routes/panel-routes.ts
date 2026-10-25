@@ -12,6 +12,7 @@ import {
   validateQuery,
 } from '../validation.js';
 import { isAuthRequired, requireAuth, requireRole } from '../../auth/authorize.js';
+import { createLoginRateLimiter, type LoginRateLimitOptions } from '../../auth/rate-limit.js';
 import { CommandRejectedError, type CommandSource } from '../../alarm/dispatcher.js';
 import {
   NeedsBypassError,
@@ -21,7 +22,7 @@ import {
   type ArmSource,
   type PanelService,
 } from '../../alarm/panel-service.js';
-import { verifyCredential, type UserRepository } from '../../auth/user-repository.js';
+import { isExpired, verifyCredential, type UserRepository } from '../../auth/user-repository.js';
 import type { LockoutService } from '../../auth/lockout-service.js';
 import type { AlarmEventService } from '../../alarm/alarm-event-service.js';
 import type { EmergencyService } from '../../alarm/alarm-event-repository.js';
@@ -37,6 +38,8 @@ export interface PanelRouteDeps {
   zoneRepo: ZoneRepository;
   /** Serves `GET /alarm-events`; omitted in tests that don't model alarm events. */
   alarmEvents?: AlarmEventService;
+  /** Overrides the disarm throttle (tests); production allows 10 failed attempts per IP per minute. */
+  disarmRateLimit?: LoginRateLimitOptions;
   /** Supplies the `driver` field of `GET /panel`; omitted in tests that don't model the Z-Wave driver. */
   driverState?: () => DriverState;
 }
@@ -74,11 +77,12 @@ export function createPanelRouter({
   zoneRepo,
   alarmEvents,
   driverState,
+  disarmRateLimit,
 }: PanelRouteDeps): Router {
   const router = Router();
 
   // The Z-Wave driver's state rides along so a client can tell "service up, driver down" from "service down".
-  router.get('/panel', requireAuth, requireRole('administrator', 'member'), (_req, res) => {
+  router.get('/panel', requireAuth, requireRole('administrator', 'member', 'installer'), (_req, res) => {
     const panel = panelService.getState();
     const body = { ...panel, modes: panelService.getModes() };
     res.status(200).json(driverState ? { ...body, driver: driverState() } : body);
@@ -88,7 +92,7 @@ export function createPanelRouter({
   router.post(
     '/panel/panic',
     requireAuth,
-    requireRole('administrator', 'member'),
+    requireRole('administrator', 'member', 'installer'),
     validateBody(panicBodySchema),
     (req, res) => {
       const { type, service } = req.body as { type: 'PANIC' | 'FIRE' | 'MEDICAL' | 'SOS'; service?: EmergencyService };
@@ -104,7 +108,7 @@ export function createPanelRouter({
   );
 
   // Mutes the siren but leaves the alarm active and monitoring running. 409 when nothing is sounding.
-  router.post('/panel/silence', requireAuth, requireRole('administrator', 'member'), (_req, res) => {
+  router.post('/panel/silence', requireAuth, requireRole('administrator', 'member', 'installer'), (_req, res) => {
     try {
       res.status(200).json({ silenced: panelService.silence() });
     } catch (err) {
@@ -118,7 +122,7 @@ export function createPanelRouter({
   router.get(
     '/alarm-events',
     requireAuth,
-    requireRole('administrator', 'member'),
+    requireRole('administrator', 'member', 'installer'),
     validateQuery(alarmEventsQuerySchema),
     (_req, res) => {
       const { active, limit } = parsedQuery<{ active?: 'true' | 'false'; limit?: number }>(res);
@@ -127,7 +131,7 @@ export function createPanelRouter({
   );
 
   // Per-mode entry/exit delay (0-180 s). Keyed by armed mode: { armed_home: { entryDelaySec, exitDelaySec }, armed_away: {...} }.
-  router.get('/modes', requireAuth, requireRole('administrator', 'member'), (_req, res) => {
+  router.get('/modes', requireAuth, requireRole('administrator', 'member', 'installer'), (_req, res) => {
     res.status(200).json(panelService.getModes());
   });
 
@@ -138,7 +142,7 @@ export function createPanelRouter({
   router.post(
     '/panel/arm',
     requireAuth,
-    requireRole('administrator', 'member'),
+    requireRole('administrator', 'member', 'installer'),
     validateBody(armBodySchema),
     asyncHandler(async (req, res) => {
       const { mode, bypass, source: armSource } = req.body as { mode: ArmMode; bypass?: string[]; source?: ArmSource };
@@ -169,8 +173,13 @@ export function createPanelRouter({
     }),
   );
 
+  // Failed attempts only. Four-digit codes are a small space and, with auth off, there is no caller to lock
+  // out, so guessing at disarm is bounded per IP here (the per-account lockout still applies when a user is known).
+  const disarmLimiter = createLoginRateLimiter({ limit: 10, action: 'disarm', ...disarmRateLimit });
+
   router.post(
     '/panel/disarm',
+    disarmLimiter,
     requireAuth,
     validateBody(codeBodySchema),
     asyncHandler(async (req, res) => {
@@ -178,7 +187,7 @@ export function createPanelRouter({
       const userId = callerUserId(req);
       // With auth off there is no caller identity, so the code itself identifies the user. A wrong
       // code is a plain 401: there is no account to attribute a failed attempt to.
-      const user = userId === undefined ? (isAuthRequired() ? undefined : userRepo.findByCode(code)) : userRepo.findById(userId);
+      const user = userId === undefined ? (isAuthRequired() ? undefined : userRepo.findByCode(code) ?? userRepo.findByDuressCode(code)) : userRepo.findById(userId);
       if (user === undefined) {
         throw new ApiError(401, 'unauthorized', isAuthRequired() ? 'A valid session is required to disarm.' : 'Invalid code.');
       }
@@ -186,11 +195,15 @@ export function createPanelRouter({
       if (lockoutService.isLocked(user)) {
         throw new ApiError(423, 'locked', 'This account is locked. Try again later.');
       }
-      if (user.role === 'guest' && user.guestExpiresAt !== null && user.guestExpiresAt <= Date.now()) {
-        throw new ApiError(401, 'unauthorized', 'This guest code has expired.');
+      if (isExpired(user, Date.now())) {
+        throw new ApiError(401, 'unauthorized', `This ${user.role} code has expired.`);
       }
 
-      if (!verifyCredential(code, user.credentialHash)) {
+      // The owner's duress code disarms exactly like the normal one (the response doesn't differ), and then
+      // quietly raises a DURESS event. Wrong-code lockout only counts codes that match neither.
+      const isDuress =
+        !verifyCredential(code, user.credentialHash) && user.duressHash !== null && verifyCredential(code, user.duressHash);
+      if (!isDuress && !verifyCredential(code, user.credentialHash)) {
         const result = lockoutService.recordFailedAttempt(user.id);
         if (result.locked) {
           throw new ApiError(423, 'locked', 'This account is locked. Try again later.');
@@ -239,7 +252,10 @@ export function createPanelRouter({
           // for an HA-originated disarm, even though it's still attributable to a linked user.
           clearedBy: source === 'home_assistant' ? 'Home Assistant' : user.name,
         });
-        res.status(200).json(panel);
+        if (isDuress) {
+          panelService.raiseDuress(`Duress code used by ${user.name}`);
+        }
+        res.status(200).json(isDuress ? panelService.getState() : panel);
       } catch (err) {
         if (err instanceof CommandRejectedError) {
           throw new ApiError(409, 'conflict', err.message);

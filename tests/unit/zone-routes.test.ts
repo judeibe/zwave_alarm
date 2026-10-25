@@ -101,7 +101,7 @@ describe('zone routes', () => {
 
   it('returns an empty list before any zones are created', async () => {
     const { app, userRepo } = await buildHarness();
-    const agent = await loginAs(app, userRepo, 'member', 'member1');
+    const agent = await loginAs(app, userRepo, 'member', '5151');
 
     const res = await agent.get('/api/v1/zones');
 
@@ -111,7 +111,7 @@ describe('zone routes', () => {
 
   it('rejects GET /zones for a guest as 403', async () => {
     const { app, userRepo } = await buildHarness();
-    const agent = await loginAs(app, userRepo, 'guest', 'guestcode');
+    const agent = await loginAs(app, userRepo, 'guest', '6161');
 
     const res = await agent.get('/api/v1/zones');
 
@@ -120,7 +120,7 @@ describe('zone routes', () => {
 
   it('creates a zone as administrator', async () => {
     const { app, userRepo } = await buildHarness();
-    const agent = await loginAs(app, userRepo, 'administrator', 'admin1');
+    const agent = await loginAs(app, userRepo, 'administrator', '4141');
 
     const res = await agent.post('/api/v1/zones').send({ name: 'Front Door' });
 
@@ -130,7 +130,7 @@ describe('zone routes', () => {
 
   it('rejects zone creation from a member as 403', async () => {
     const { app, userRepo } = await buildHarness();
-    const agent = await loginAs(app, userRepo, 'member', 'member1');
+    const agent = await loginAs(app, userRepo, 'member', '5151');
 
     const res = await agent.post('/api/v1/zones').send({ name: 'Front Door' });
 
@@ -139,7 +139,7 @@ describe('zone routes', () => {
 
   it('rejects zone creation with a missing name as 400', async () => {
     const { app, userRepo } = await buildHarness();
-    const agent = await loginAs(app, userRepo, 'administrator', 'admin1');
+    const agent = await loginAs(app, userRepo, 'administrator', '4141');
 
     const res = await agent.post('/api/v1/zones').send({});
 
@@ -148,7 +148,7 @@ describe('zone routes', () => {
 
   it('assigns a known zwave node to a zone as administrator', async () => {
     const { app, userRepo, nodeMap } = await buildHarness();
-    const agent = await loginAs(app, userRepo, 'administrator', 'admin1');
+    const agent = await loginAs(app, userRepo, 'administrator', '4141');
     nodeMap.add(10);
     const zone = (await agent.post('/api/v1/zones').send({ name: 'Front Door' })).body;
 
@@ -162,7 +162,7 @@ describe('zone routes', () => {
 
   it('rejects an unknown zwave node as 400', async () => {
     const { app, userRepo } = await buildHarness();
-    const agent = await loginAs(app, userRepo, 'administrator', 'admin1');
+    const agent = await loginAs(app, userRepo, 'administrator', '4141');
     const zone = (await agent.post('/api/v1/zones').send({ name: 'Front Door' })).body;
 
     const res = await agent
@@ -174,7 +174,7 @@ describe('zone routes', () => {
 
   it('rejects assigning to a nonexistent zone as 404', async () => {
     const { app, userRepo, nodeMap } = await buildHarness();
-    const agent = await loginAs(app, userRepo, 'administrator', 'admin1');
+    const agent = await loginAs(app, userRepo, 'administrator', '4141');
     nodeMap.add(10);
 
     const res = await agent
@@ -186,7 +186,7 @@ describe('zone routes', () => {
 
   it('rejects a node already assigned to another zone as 409', async () => {
     const { app, userRepo, nodeMap } = await buildHarness();
-    const agent = await loginAs(app, userRepo, 'administrator', 'admin1');
+    const agent = await loginAs(app, userRepo, 'administrator', '4141');
     nodeMap.add(10);
     const zoneA = (await agent.post('/api/v1/zones').send({ name: 'Front Door' })).body;
     const zoneB = (await agent.post('/api/v1/zones').send({ name: 'Garage' })).body;
@@ -204,7 +204,7 @@ describe('zone routes', () => {
 
   it('rejects an invalid category as 400', async () => {
     const { app, userRepo, nodeMap } = await buildHarness();
-    const agent = await loginAs(app, userRepo, 'administrator', 'admin1');
+    const agent = await loginAs(app, userRepo, 'administrator', '4141');
     nodeMap.add(10);
     const zone = (await agent.post('/api/v1/zones').send({ name: 'Front Door' })).body;
 
@@ -217,10 +217,10 @@ describe('zone routes', () => {
 
   it('rejects sensor assignment from a member as 403', async () => {
     const { app, userRepo, nodeMap } = await buildHarness();
-    const adminAgent = await loginAs(app, userRepo, 'administrator', 'admin1');
+    const adminAgent = await loginAs(app, userRepo, 'administrator', '4141');
     nodeMap.add(10);
     const zone = (await adminAgent.post('/api/v1/zones').send({ name: 'Front Door' })).body;
-    const memberAgent = await loginAs(app, userRepo, 'member', 'member1');
+    const memberAgent = await loginAs(app, userRepo, 'member', '5151');
 
     const res = await memberAgent
       .post(`/api/v1/zones/${zone.id}/sensors`)
@@ -231,7 +231,7 @@ describe('zone routes', () => {
   describe('configuration panel endpoints', () => {
     it('creates a zone with a description and rejects a duplicate name', async () => {
       const { app, userRepo } = await buildHarness();
-      const agent = await loginAs(app, userRepo, 'administrator', 'admin1');
+      const agent = await loginAs(app, userRepo, 'administrator', '4141');
 
       const created = await agent.post('/api/v1/zones').send({ name: 'Garage', description: 'Side entry' });
       const dup = await agent.post('/api/v1/zones').send({ name: 'garage' });
@@ -243,7 +243,7 @@ describe('zone routes', () => {
 
     it('PATCHes a zone, 404s an unknown one, 400s an empty body, 409s a name clash', async () => {
       const { app, userRepo } = await buildHarness();
-      const agent = await loginAs(app, userRepo, 'administrator', 'admin1');
+      const agent = await loginAs(app, userRepo, 'administrator', '4141');
       const a = (await agent.post('/api/v1/zones').send({ name: 'A' })).body;
       await agent.post('/api/v1/zones').send({ name: 'B' });
 
@@ -261,7 +261,7 @@ describe('zone routes', () => {
 
     it('refuses to delete a zone with sensors unless forced', async () => {
       const { app, userRepo, nodeMap } = await buildHarness();
-      const agent = await loginAs(app, userRepo, 'administrator', 'admin1');
+      const agent = await loginAs(app, userRepo, 'administrator', '4141');
       nodeMap.add(5);
       const zone = (await agent.post('/api/v1/zones').send({ name: 'Hall' })).body;
       await agent.post(`/api/v1/zones/${zone.id}/sensors`).send({ zwaveNodeId: 5, name: 'PIR', category: 'intrusion' });
@@ -278,9 +278,9 @@ describe('zone routes', () => {
 
     it('refuses to delete a zone a guest is restricted to', async () => {
       const { app, userRepo } = await buildHarness();
-      const agent = await loginAs(app, userRepo, 'administrator', 'admin1');
+      const agent = await loginAs(app, userRepo, 'administrator', '4141');
       const zone = (await agent.post('/api/v1/zones').send({ name: 'Shed' })).body;
-      await agent.post('/api/v1/users').send({ name: 'G', role: 'guest', code: 'gg11', guestZoneId: zone.id });
+      await agent.post('/api/v1/users').send({ name: 'G', role: 'guest', code: '9191', guestZoneId: zone.id });
 
       const res = await agent.delete(`/api/v1/zones/${zone.id}?force=true`);
 
@@ -290,7 +290,7 @@ describe('zone routes', () => {
 
     it('lists only unassigned, non-controller nodes as discoverable', async () => {
       const { app, userRepo, nodeMap } = await buildHarness();
-      const agent = await loginAs(app, userRepo, 'administrator', 'admin1');
+      const agent = await loginAs(app, userRepo, 'administrator', '4141');
       nodeMap.add(1, { isControllerNode: true });
       nodeMap.add(2, { name: 'Door', deviceConfig: { manufacturer: 'Aeotec', label: 'Door Sensor' } });
       nodeMap.add(3, { status: 3 });
@@ -309,7 +309,7 @@ describe('zone routes', () => {
 
     it('restricts discovery and sensor edits to administrators', async () => {
       const { app, userRepo } = await buildHarness();
-      const agent = await loginAs(app, userRepo, 'member', 'member1');
+      const agent = await loginAs(app, userRepo, 'member', '5151');
 
       expect((await agent.get('/api/v1/sensors/discoverable')).status).toBe(403);
       expect((await agent.patch('/api/v1/sensors/x').send({ name: 'n' })).status).toBe(403);
@@ -318,7 +318,7 @@ describe('zone routes', () => {
 
     it('sets placement and per-mode armed flags, resetting flags to the placement defaults on a new placement', async () => {
       const { app, userRepo, nodeMap } = await buildHarness();
-      const agent = await loginAs(app, userRepo, 'administrator', 'admin1');
+      const agent = await loginAs(app, userRepo, 'administrator', '4141');
       nodeMap.add(8);
       const zone = (await agent.post('/api/v1/zones').send({ name: 'One' })).body;
       const created = await agent
@@ -339,7 +339,7 @@ describe('zone routes', () => {
 
     it('moves, renames and unassigns a sensor', async () => {
       const { app, userRepo, nodeMap } = await buildHarness();
-      const agent = await loginAs(app, userRepo, 'administrator', 'admin1');
+      const agent = await loginAs(app, userRepo, 'administrator', '4141');
       nodeMap.add(7);
       const z1 = (await agent.post('/api/v1/zones').send({ name: 'One' })).body;
       const z2 = (await agent.post('/api/v1/zones').send({ name: 'Two' })).body;

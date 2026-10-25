@@ -19,14 +19,14 @@ export interface KeypadRouteDeps {
 export function createKeypadRouter({ keypadService, keypadSettings }: KeypadRouteDeps): Router {
   const router = Router();
 
-  router.get('/keypads', requireAuth, requireRole('administrator', 'member'), (_req, res) => {
+  router.get('/keypads', requireAuth, requireRole('administrator', 'member', 'installer'), (_req, res) => {
     res.status(200).json({ keypads: keypadService.list() });
   });
 
   router.post(
     '/keypads/:nodeId/chime',
     requireAuth,
-    requireRole('administrator', 'member'),
+    requireRole('administrator', 'member', 'installer'),
     validateBody(chimeBodySchema),
     asyncHandler(async (req, res) => {
       const nodeId = Number(req.params.nodeId);
@@ -51,7 +51,7 @@ export function createKeypadRouter({ keypadService, keypadSettings }: KeypadRout
   );
 
   if (keypadSettings) {
-    router.get('/keypad-settings', requireAuth, requireRole('administrator', 'member'), (_req, res) => {
+    router.get('/keypad-settings', requireAuth, requireRole('administrator', 'member', 'installer'), (_req, res) => {
       res.status(200).json(keypadSettings.get());
     });
 

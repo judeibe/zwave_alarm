@@ -27,14 +27,14 @@ function parseNodeId(value: string): number {
 export function createSirenRouter({ sirenRepo, driver }: SirenRouteDeps): Router {
   const router = Router();
 
-  router.get('/sirens', requireAuth, requireRole('administrator', 'member'), (_req, res) => {
+  router.get('/sirens', requireAuth, requireRole('administrator', 'member', 'installer'), (_req, res) => {
     res.status(200).json(sirenRepo.list());
   });
 
   router.put(
     '/sirens/:nodeId',
     requireAuth,
-    requireRole('administrator'),
+    requireRole('administrator', 'installer'),
     validateBody(sirenBodySchema),
     (req, res) => {
       const nodeId = parseNodeId(req.params.nodeId);
@@ -55,7 +55,7 @@ export function createSirenRouter({ sirenRepo, driver }: SirenRouteDeps): Router
     },
   );
 
-  router.delete('/sirens/:nodeId', requireAuth, requireRole('administrator'), (req, res) => {
+  router.delete('/sirens/:nodeId', requireAuth, requireRole('administrator', 'installer'), (req, res) => {
     const nodeId = parseNodeId(req.params.nodeId);
     if (!sirenRepo.delete(nodeId)) {
       throw new ApiError(404, 'not_found', `Siren ${String(nodeId)} is not enrolled.`);

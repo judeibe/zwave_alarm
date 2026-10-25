@@ -71,7 +71,7 @@ function parseKind(value: string): ScheduleKind {
  */
 export function createLockRouter({ lockService }: LockRouteDeps): Router {
   const router = Router();
-  const guard = [requireAuth, requireRole('administrator', 'member')];
+  const guard = [requireAuth, requireRole('administrator', 'member', 'installer')];
 
   /** Wraps a handler so a lock error becomes its API error and a missing lock is a 404 up front. */
   const lockHandler = (handler: (nodeId: number, req: Request, res: Response) => Promise<void>) =>
@@ -89,14 +89,14 @@ export function createLockRouter({ lockService }: LockRouteDeps): Router {
   });
 
   // Paired but not enrolled locks, so an administrator can pick one to add. Never used to create devices.
-  router.get('/locks/available', ...guard, requireRole('administrator'), (_req, res) => {
+  router.get('/locks/available', ...guard, requireRole('administrator', 'installer'), (_req, res) => {
     res.status(200).json({ locks: lockService.listAvailable() });
   });
 
   router.put(
     '/locks/:nodeId/enrollment',
     ...guard,
-    requireRole('administrator'),
+    requireRole('administrator', 'installer'),
     lockHandler(async (nodeId, _req, res) => {
       res.status(200).json(await lockService.enroll(nodeId));
     }),
@@ -105,7 +105,7 @@ export function createLockRouter({ lockService }: LockRouteDeps): Router {
   router.delete(
     '/locks/:nodeId/enrollment',
     ...guard,
-    requireRole('administrator'),
+    requireRole('administrator', 'installer'),
     lockHandler(async (nodeId, _req, res) => {
       res.status(200).json(await lockService.unenroll(nodeId));
     }),

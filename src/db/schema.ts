@@ -8,6 +8,11 @@ import Database from 'better-sqlite3';
 interface Migration {
   id: string;
   sql: string;
+  /**
+   * Rebuilds a table other tables point at (SQLite cannot alter a CHECK constraint). Foreign keys are switched
+   * off around the migration, as SQLite's own table-rebuild procedure requires, and checked again afterwards.
+   */
+  foreignKeysOff?: boolean;
 }
 
 // Table creation order respects FOREIGN KEY targets (a table must be created
@@ -216,6 +221,37 @@ const MIGRATIONS: Migration[] = [
       ALTER TABLE sensor_devices ADD COLUMN tampered INTEGER NOT NULL DEFAULT 0 CHECK (tampered IN (0, 1));
     `,
   },
+  {
+    // Ring spec phase 4: the `installer` role (48 h access) and a duress code on the owner. SQLite cannot
+    // widen a CHECK constraint, so `users` is rebuilt with the same columns plus `duress_hash`.
+    id: '011_installer_role_and_duress_code',
+    foreignKeysOff: true,
+    sql: `
+      CREATE TABLE users_new (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        role TEXT NOT NULL CHECK (role IN ('administrator', 'member', 'guest', 'installer')),
+        credential_hash TEXT NOT NULL,
+        guest_expires_at INTEGER,
+        guest_zone_id TEXT REFERENCES zones(id),
+        failed_attempt_count INTEGER NOT NULL DEFAULT 0,
+        locked_until INTEGER,
+        created_at INTEGER NOT NULL,
+        ha_person_id TEXT,
+        ha_user_id TEXT,
+        duress_hash TEXT
+      );
+      INSERT INTO users_new
+        (id, name, role, credential_hash, guest_expires_at, guest_zone_id, failed_attempt_count, locked_until,
+         created_at, ha_person_id, ha_user_id)
+        SELECT id, name, role, credential_hash, guest_expires_at, guest_zone_id, failed_attempt_count, locked_until,
+               created_at, ha_person_id, ha_user_id
+        FROM users;
+      DROP TABLE users;
+      ALTER TABLE users_new RENAME TO users;
+      CREATE UNIQUE INDEX idx_users_ha_person_id ON users(ha_person_id) WHERE ha_person_id IS NOT NULL;
+    `,
+  },
 ];
 
 function ensureMigrationsTable(db: Database.Database): void {
@@ -240,13 +276,30 @@ export function runMigrations(db: Database.Database): void {
   }
 
   const recordMigration = db.prepare('INSERT INTO schema_migrations (id, applied_at) VALUES (?, ?)');
-  const applyPending = db.transaction(() => {
-    for (const migration of pending) {
+  for (const migration of pending) {
+    const apply = db.transaction(() => {
       db.exec(migration.sql);
       recordMigration.run(migration.id, Date.now());
+    });
+    if (!migration.foreignKeysOff) {
+      apply();
+      continue;
     }
-  });
-  applyPending();
+    // PRAGMA foreign_keys is a no-op inside a transaction, so it is switched around the migration's own.
+    const wasOn = db.pragma('foreign_keys', { simple: true }) === 1;
+    db.pragma('foreign_keys = OFF');
+    try {
+      apply();
+      const violations = db.pragma('foreign_key_check') as unknown[];
+      if (violations.length > 0) {
+        throw new Error(`migration ${migration.id} left ${String(violations.length)} foreign key violation(s)`);
+      }
+    } finally {
+      if (wasOn) {
+        db.pragma('foreign_keys = ON');
+      }
+    }
+  }
 }
 
 /**

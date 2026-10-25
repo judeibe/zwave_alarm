@@ -1,8 +1,8 @@
 import { Router, type NextFunction, type Request, type Response } from 'express';
 import { ApiError } from '../app.js';
 import {
-  codeBodySchema,
   createUserBodySchema,
+  newCodeBodySchema,
   parsedQuery,
   updateUserBodySchema,
   usersQuerySchema,
@@ -11,7 +11,7 @@ import {
 } from '../validation.js';
 import { requireAuth, requireRole } from '../../auth/authorize.js';
 import { createLogger } from '../../config/logger.js';
-import { hasCode, type CreateUserInput, type User, type UserRepository } from '../../auth/user-repository.js';
+import { hasCode, MAX_CODES, type CreateUserInput, type User, type UserRepository } from '../../auth/user-repository.js';
 
 const logger = createLogger('api/users');
 
@@ -25,8 +25,11 @@ interface PublicUser {
   name: string;
   role: User['role'];
   hasCode: boolean;
+  /** Whether the owner has a duress code set. Never says what it is. */
+  hasDuressCode: boolean;
   haPersonId: string | null;
   haUserId: string | null;
+  /** When a guest's or installer's access ends (an installer's is 48 h from creation); null otherwise. */
   guestExpiresAt: number | null;
   guestZoneId: string | null;
   failedAttemptCount: number;
@@ -40,6 +43,7 @@ function toPublicUser(user: User): PublicUser {
     name: user.name,
     role: user.role,
     hasCode: hasCode(user),
+    hasDuressCode: user.duressHash !== null,
     haPersonId: user.haPersonId,
     haUserId: user.haUserId,
     guestExpiresAt: user.guestExpiresAt,
@@ -115,7 +119,8 @@ export function createUserRouter({ userRepo }: UserRouteDeps): Router {
   };
 
   router.post('/users', requireAdminUnlessFirstRun, validateBody(createUserBodySchema), (req, res) => {
-    const input = req.body as CreateUserInput;
+    const input = { ...(req.body as CreateUserInput & { confirmCode?: string }) };
+    delete input.confirmCode; // only checked by the body schema
     if (res.locals.firstRunBootstrap === true && input.role !== 'administrator') {
       throw new ApiError(403, 'forbidden', 'The first account must be an administrator.');
     }
@@ -125,6 +130,9 @@ export function createUserRouter({ userRepo }: UserRouteDeps): Router {
 
     if (input.code !== undefined && userRepo.isCodeInUse(input.code)) {
       throw new ApiError(409, 'code_in_use', 'That code is already in use by another user.');
+    }
+    if (input.code !== undefined && userRepo.countCodes() >= MAX_CODES) {
+      throw new ApiError(409, 'code_limit', `A location holds at most ${String(MAX_CODES)} codes.`);
     }
 
     try {
@@ -161,17 +169,49 @@ export function createUserRouter({ userRepo }: UserRouteDeps): Router {
     '/users/:userId/code',
     requireAuth,
     requireRole('administrator'),
-    validateBody(codeBodySchema),
+    validateBody(newCodeBodySchema),
     (req, res) => {
       const user = requireUser(req.params.userId);
       const { code } = req.body as { code: string };
       if (userRepo.isCodeInUse(code, user.id)) {
         throw new ApiError(409, 'code_in_use', 'That code is already in use by another user.');
       }
+      if (!hasCode(user) && userRepo.countCodes() >= MAX_CODES) {
+        throw new ApiError(409, 'code_limit', `A location holds at most ${String(MAX_CODES)} codes.`);
+      }
       userRepo.setCode(user.id, code);
       res.status(204).send();
     },
   );
+
+  // The owner's duress code: disarms like a normal code but quietly raises a DURESS alarm event (one per owner).
+  router.put(
+    '/users/:userId/duress-code',
+    requireAuth,
+    requireRole('administrator'),
+    validateBody(newCodeBodySchema),
+    (req, res) => {
+      const user = requireUser(req.params.userId);
+      if (user.role !== 'administrator') {
+        throw new ApiError(400, 'bad_request', 'Only an administrator (the owner) can have a duress code.');
+      }
+      const { code } = req.body as { code: string };
+      if (userRepo.isCodeInUse(code, undefined, { exceptDuressOf: user.id })) {
+        throw new ApiError(409, 'code_in_use', 'That code is already in use by another user.');
+      }
+      if (user.duressHash === null && userRepo.countCodes() >= MAX_CODES) {
+        throw new ApiError(409, 'code_limit', `A location holds at most ${String(MAX_CODES)} codes.`);
+      }
+      userRepo.setDuressCode(user.id, code);
+      res.status(204).send();
+    },
+  );
+
+  router.delete('/users/:userId/duress-code', requireAuth, requireRole('administrator'), (req, res) => {
+    const user = requireUser(req.params.userId);
+    userRepo.setDuressCode(user.id, null);
+    res.status(204).send();
+  });
 
   router.delete('/users/:userId/code', requireAuth, requireRole('administrator'), (req, res) => {
     const user = requireUser(req.params.userId);

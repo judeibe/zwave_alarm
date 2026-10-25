@@ -50,9 +50,9 @@ async function buildHarness(): Promise<{ app: Express; userRepo: UserRepository 
 }
 
 async function loginAsAdmin(app: Express, userRepo: UserRepository) {
-  userRepo.create({ name: 'Owner', role: 'administrator', code: 'admin1' });
+  userRepo.create({ name: 'Owner', role: 'administrator', code: '4141' });
   const agent = request.agent(app);
-  await agent.post('/api/v1/auth/login').send({ code: 'admin1' }).expect(200);
+  await agent.post('/api/v1/auth/login').send({ code: '4141' }).expect(200);
   return agent;
 }
 
@@ -92,9 +92,9 @@ describe('user routes', () => {
 
   it('rejects GET /users from a member as 403', async () => {
     const { app, userRepo } = await buildHarness();
-    userRepo.create({ name: 'Mem', role: 'member', code: 'member1' });
+    userRepo.create({ name: 'Mem', role: 'member', code: '5151' });
     const agent = request.agent(app);
-    await agent.post('/api/v1/auth/login').send({ code: 'member1' }).expect(200);
+    await agent.post('/api/v1/auth/login').send({ code: '5151' }).expect(200);
 
     const res = await agent.get('/api/v1/users');
 
@@ -105,7 +105,7 @@ describe('user routes', () => {
     const { app, userRepo } = await buildHarness();
     const agent = await loginAsAdmin(app, userRepo);
 
-    const res = await agent.post('/api/v1/users').send({ name: 'Mem', role: 'member', code: 'member1' });
+    const res = await agent.post('/api/v1/users').send({ name: 'Mem', role: 'member', code: '5151' });
 
     expect(res.status).toBe(201);
     expect(res.body).toMatchObject({ name: 'Mem', role: 'member' });
@@ -119,7 +119,7 @@ describe('user routes', () => {
 
     const res = await agent
       .post('/api/v1/users')
-      .send({ name: 'Guest', role: 'guest', code: 'guestcode', guestExpiresAt: isoExpiry });
+      .send({ name: 'Guest', role: 'guest', code: '6161', guestExpiresAt: isoExpiry });
 
     expect(res.status).toBe(201);
     expect(res.body.guestExpiresAt).toBe(new Date(isoExpiry).getTime());
@@ -129,7 +129,7 @@ describe('user routes', () => {
     const { app, userRepo } = await buildHarness();
     const agent = await loginAsAdmin(app, userRepo);
 
-    const res = await agent.post('/api/v1/users').send({ name: 'Guest', role: 'guest', code: 'guestcode' });
+    const res = await agent.post('/api/v1/users').send({ name: 'Guest', role: 'guest', code: '6161' });
 
     expect(res.status).toBe(400);
   });
@@ -138,7 +138,7 @@ describe('user routes', () => {
     const { app, userRepo } = await buildHarness();
     const agent = await loginAsAdmin(app, userRepo);
 
-    const res = await agent.post('/api/v1/users').send({ name: 'X', role: 'superadmin', code: 'x' });
+    const res = await agent.post('/api/v1/users').send({ name: 'X', role: 'superadmin', code: '1234' });
 
     expect(res.status).toBe(400);
   });
@@ -153,11 +153,11 @@ describe('user routes', () => {
 
   it('rejects user creation from a member as 403', async () => {
     const { app, userRepo } = await buildHarness();
-    userRepo.create({ name: 'Mem', role: 'member', code: 'member1' });
+    userRepo.create({ name: 'Mem', role: 'member', code: '5151' });
     const agent = request.agent(app);
-    await agent.post('/api/v1/auth/login').send({ code: 'member1' }).expect(200);
+    await agent.post('/api/v1/auth/login').send({ code: '5151' }).expect(200);
 
-    const res = await agent.post('/api/v1/users').send({ name: 'X', role: 'member', code: 'x' });
+    const res = await agent.post('/api/v1/users').send({ name: 'X', role: 'member', code: '1234' });
 
     expect(res.status).toBe(403);
   });
@@ -165,7 +165,7 @@ describe('user routes', () => {
   it('deletes a user as administrator', async () => {
     const { app, userRepo } = await buildHarness();
     const agent = await loginAsAdmin(app, userRepo);
-    const created = (await agent.post('/api/v1/users').send({ name: 'Mem', role: 'member', code: 'member1' })).body;
+    const created = (await agent.post('/api/v1/users').send({ name: 'Mem', role: 'member', code: '5151' })).body;
 
     const res = await agent.delete(`/api/v1/users/${created.id}`);
 
@@ -176,10 +176,10 @@ describe('user routes', () => {
   it('rejects delete from a member as 403', async () => {
     const { app, userRepo } = await buildHarness();
     const adminAgent = await loginAsAdmin(app, userRepo);
-    const created = (await adminAgent.post('/api/v1/users').send({ name: 'Mem', role: 'member', code: 'member1' }))
+    const created = (await adminAgent.post('/api/v1/users').send({ name: 'Mem', role: 'member', code: '5151' }))
       .body;
     const memberAgent = request.agent(app);
-    await memberAgent.post('/api/v1/auth/login').send({ code: 'member1' }).expect(200);
+    await memberAgent.post('/api/v1/auth/login').send({ code: '5151' }).expect(200);
 
     const res = await memberAgent.delete(`/api/v1/users/${created.id}`);
 
@@ -218,15 +218,15 @@ describe('user routes', () => {
       const agent = await loginAsAdmin(app, userRepo);
       const user = (await agent.post('/api/v1/users').send({ name: 'Mem', role: 'member' })).body;
 
-      const put = await agent.put(`/api/v1/users/${user.id}/code`).send({ code: 'newcode1' });
-      const login = await request(app).post('/api/v1/auth/login').send({ code: 'newcode1' });
+      const put = await agent.put(`/api/v1/users/${user.id}/code`).send({ code: '7171' });
+      const login = await request(app).post('/api/v1/auth/login').send({ code: '7171' });
       const list = await agent.get('/api/v1/users');
 
       expect(put.status).toBe(204);
       expect(put.text).toBe('');
       expect(login.status).toBe(200);
       expect(list.body.find((u: { id: string }) => u.id === user.id).hasCode).toBe(true);
-      expect(JSON.stringify(list.body)).not.toContain('newcode1');
+      expect(JSON.stringify(list.body)).not.toContain('7171');
     });
 
     it('rejects a code already used by someone else with 409 code_in_use', async () => {
@@ -234,7 +234,7 @@ describe('user routes', () => {
       const agent = await loginAsAdmin(app, userRepo);
       const user = (await agent.post('/api/v1/users').send({ name: 'Mem', role: 'member' })).body;
 
-      const res = await agent.put(`/api/v1/users/${user.id}/code`).send({ code: 'admin1' });
+      const res = await agent.put(`/api/v1/users/${user.id}/code`).send({ code: '4141' });
 
       expect(res.status).toBe(409);
       expect(res.body.error.code).toBe('code_in_use');
@@ -243,11 +243,11 @@ describe('user routes', () => {
     it('clears a code so it no longer logs in, resets lockout, and 404s unknown users', async () => {
       const { app, userRepo } = await buildHarness();
       const agent = await loginAsAdmin(app, userRepo);
-      const user = (await agent.post('/api/v1/users').send({ name: 'Mem', role: 'member', code: 'memcode1' })).body;
+      const user = (await agent.post('/api/v1/users').send({ name: 'Mem', role: 'member', code: '8181' })).body;
 
       const cleared = await agent.delete(`/api/v1/users/${user.id}/code`);
-      const login = await request(app).post('/api/v1/auth/login').send({ code: 'memcode1' });
-      const missing = await agent.put('/api/v1/users/nope/code').send({ code: 'abcd' });
+      const login = await request(app).post('/api/v1/auth/login').send({ code: '8181' });
+      const missing = await agent.put('/api/v1/users/nope/code').send({ code: '1234' });
 
       expect(cleared.status).toBe(204);
       expect(login.status).toBe(401);
@@ -269,13 +269,13 @@ describe('user routes', () => {
     it('PATCHes a user, enforcing the guest rule and admin-only access', async () => {
       const { app, userRepo } = await buildHarness();
       const agent = await loginAsAdmin(app, userRepo);
-      const user = (await agent.post('/api/v1/users').send({ name: 'Mem', role: 'member', code: 'memcode1' })).body;
+      const user = (await agent.post('/api/v1/users').send({ name: 'Mem', role: 'member', code: '8181' })).body;
 
       const renamed = await agent.patch(`/api/v1/users/${user.id}`).send({ name: 'Mem2', haPersonId: 'person.mem' });
       const badGuest = await agent.patch(`/api/v1/users/${user.id}`).send({ role: 'guest' });
       const empty = await agent.patch(`/api/v1/users/${user.id}`).send({});
       const memberAgent = request.agent(app);
-      await memberAgent.post('/api/v1/auth/login').send({ code: 'memcode1' }).expect(200);
+      await memberAgent.post('/api/v1/auth/login').send({ code: '8181' }).expect(200);
       const forbidden = await memberAgent.patch(`/api/v1/users/${user.id}`).send({ name: 'x' });
 
       expect(renamed.body).toMatchObject({ name: 'Mem2', haPersonId: 'person.mem' });

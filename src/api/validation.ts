@@ -14,10 +14,23 @@ const MAX_CODE_LENGTH = 128;
 const MAX_NAME_LENGTH = 100;
 
 const code = z.string().min(1, 'must not be empty').max(MAX_CODE_LENGTH);
+/** A code being created or changed: exactly four digits (Ring spec, Access). Codes already stored stay valid. */
+const newCode = z.string().regex(/^\d{4}$/, 'must be exactly 4 digits');
 const name = z.string().min(1, 'must not be empty').max(MAX_NAME_LENGTH);
 
 /** `POST /api/v1/auth/login` and `POST /api/v1/panel/disarm` bodies. */
 export const codeBodySchema = z.object({ code });
+
+/**
+ * `PUT /api/v1/users/{userId}/code` and `PUT .../duress-code` body: a new four-digit code. `confirmCode` is the
+ * second entry the spec asks for; when sent it must equal `code`.
+ */
+export const newCodeBodySchema = z
+  .object({ code: newCode, confirmCode: z.string().optional() })
+  .refine((body) => body.confirmCode === undefined || body.confirmCode === body.code, {
+    message: '"confirmCode" must match "code"',
+    path: ['confirmCode'],
+  });
 
 /** `POST /api/v1/panel/arm` body. */
 export const ARM_SOURCES = ['app', 'keypad', 'lock', 'schedule', 'alexa'] as const;
@@ -112,17 +125,21 @@ const guestExpiresAt = z
   .transform((value) => (typeof value === 'number' ? value : Date.parse(value)));
 
 const haId = z.string().min(1).max(MAX_NAME_LENGTH);
-const role = z.enum(['administrator', 'member', 'guest']);
+const role = z.enum(['administrator', 'member', 'guest', 'installer']);
 
 /** `POST /api/v1/users` body. `code` may be omitted; the user then has no code until `PUT /users/{id}/code`. */
 export const createUserBodySchema = z.object({
   name,
   role,
-  code: code.optional(),
+  code: newCode.optional(),
+  confirmCode: z.string().optional(),
   haPersonId: haId.optional(),
   haUserId: haId.optional(),
   guestExpiresAt: guestExpiresAt.optional(),
   guestZoneId: z.string().min(1).optional(),
+}).refine((body) => body.confirmCode === undefined || body.confirmCode === body.code, {
+  message: '"confirmCode" must match "code"',
+  path: ['confirmCode'],
 });
 
 /** `PATCH /api/v1/users/{userId}` body (never carries a code). `null` clears a nullable field. */

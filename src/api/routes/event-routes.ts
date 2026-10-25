@@ -17,7 +17,7 @@ export interface EventRouteDeps {
 export function createEventRouter({ eventRepo }: EventRouteDeps): Router {
   const router = Router();
 
-  router.get('/events', requireAuth, requireRole('administrator', 'member'), validateQuery(eventsQuerySchema), (_req, res) => {
+  router.get('/events', requireAuth, requireRole('administrator', 'member', 'installer'), validateQuery(eventsQuerySchema), (_req, res) => {
     res.status(200).json(eventRepo.list(parsedQuery<ListSecurityEventsOptions>(res)));
   });
 

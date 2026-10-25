@@ -164,7 +164,7 @@ describe('request validation', () => {
 
       const res = await request(app)
         .post('/api/v1/users')
-        .send({ name: 'Owner', role: 'administrator', code: '123456' });
+        .send({ name: 'Owner', role: 'administrator', code: '1234' });
 
       expect(res.status).toBe(201);
       expect(res.body).toMatchObject({ name: 'Owner', role: 'administrator' });
@@ -174,7 +174,7 @@ describe('request validation', () => {
     it('refuses to bootstrap a non-administrator', async () => {
       const { app } = await buildHarness();
 
-      const res = await request(app).post('/api/v1/users').send({ name: 'Mem', role: 'member', code: '123456' });
+      const res = await request(app).post('/api/v1/users').send({ name: 'Mem', role: 'member', code: '1234' });
 
       expect(res.status).toBe(403);
       expect(res.body.error.code).toBe('forbidden');
@@ -182,11 +182,11 @@ describe('request validation', () => {
 
     it('requires an administrator session once any user exists', async () => {
       const { app } = await buildHarness();
-      await request(app).post('/api/v1/users').send({ name: 'Owner', role: 'administrator', code: '123456' }).expect(201);
+      await request(app).post('/api/v1/users').send({ name: 'Owner', role: 'administrator', code: '1234' }).expect(201);
 
       const res = await request(app)
         .post('/api/v1/users')
-        .send({ name: 'Intruder', role: 'administrator', code: '999999' });
+        .send({ name: 'Intruder', role: 'administrator', code: '9999' });
 
       expect(res.status).toBe(401);
     });
