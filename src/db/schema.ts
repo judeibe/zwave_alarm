@@ -325,6 +325,31 @@ const MIGRATIONS: Migration[] = [
       );
     `,
   },
+  {
+    // Ring spec phase 6a: what each enrolled lock does with the alarm, and which lock slot holds which user's code.
+    id: '015_lock_automation',
+    sql: `
+      CREATE TABLE lock_mode_settings (
+        node_id INTEGER PRIMARY KEY,
+        arm_on_lock_with_code INTEGER NOT NULL DEFAULT 0 CHECK (arm_on_lock_with_code IN (0, 1)),
+        arm_on_one_touch INTEGER NOT NULL DEFAULT 0 CHECK (arm_on_one_touch IN (0, 1)),
+        disarm_on_unlock INTEGER NOT NULL DEFAULT 0 CHECK (disarm_on_unlock IN (0, 1)),
+        action_disarmed TEXT CHECK (action_disarmed IN ('lock', 'unlock')),
+        action_armed_home TEXT CHECK (action_armed_home IN ('lock', 'unlock')),
+        action_armed_away TEXT CHECK (action_armed_away IN ('lock', 'unlock'))
+      );
+
+      CREATE TABLE lock_code_slots (
+        node_id INTEGER NOT NULL,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        slot INTEGER NOT NULL CHECK (slot BETWEEN 1 AND 255),
+        status TEXT NOT NULL CHECK (status IN ('synced', 'failed')),
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (node_id, user_id),
+        UNIQUE (node_id, slot)
+      );
+    `,
+  },
 ];
 
 function ensureMigrationsTable(db: Database.Database): void {

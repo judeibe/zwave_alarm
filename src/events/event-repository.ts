@@ -29,6 +29,12 @@ export const SECURITY_EVENT_TYPES = [
   'mode_schedule_removed',
   'mode_schedule_applied',
   'mode_schedule_skipped',
+  // Locks (phase 6a):
+  'lock_locked',
+  'lock_unlocked',
+  'lock_jammed',
+  'lock_offline',
+  'lock_online',
 ] as const;
 export type SecurityEventType = (typeof SECURITY_EVENT_TYPES)[number];
 export type SecurityEventSource = 'user' | 'home_assistant' | 'system';

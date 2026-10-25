@@ -18,6 +18,10 @@ import { PanelService } from './alarm/panel-service.js';
 import { startInstallerExpirySweep } from './auth/installer-expiry.js';
 import { AlarmEventRepository } from './alarm/alarm-event-repository.js';
 import { AlarmEventService } from './alarm/alarm-event-service.js';
+import { LockAutomation } from './locks/lock-automation.js';
+import { LockCodeSlotRepository } from './locks/lock-code-slots.js';
+import { LockCodeSync } from './locks/lock-code-sync.js';
+import { LockModeSettingsRepository } from './locks/lock-mode-settings.js';
 import { ModeScheduleRepository, ModeScheduleRunner } from './alarm/mode-schedule.js';
 import { GuestScheduleRepository } from './auth/guest-schedule.js';
 import { SirenRepository } from './alarm/siren-repository.js';
@@ -65,7 +69,6 @@ const modeSchedules = new ModeScheduleRepository(db);
 // SIREN_NODE_ID only seeds the first base siren; afterwards sirens are managed with /api/v1/sirens.
 sirenRepo.seedBase(config.sirenNodeId);
 const panelService = new PanelService(panelRepo, eventRepo, { modeConfig: modeConfigRepo, sensorRepo, alarmEvents });
-startInstallerExpirySweep(userRepo);
 const lockoutService = new LockoutService(userRepo, lockoutPolicyRepo, eventRepo, panelService);
 
 const driver = getDriver();
@@ -101,6 +104,8 @@ const keypadRegistry = new KeypadAdapterRegistry();
 const keypadService = new KeypadService((nodeId, writes) => keypadGateway.writeValues(nodeId, writes));
 const keypadGateway: KeypadGateway = new KeypadGateway(driver, keypadRegistry, keypadService);
 // Schlage locks (src/locks): recognised by manufacturer/product id, so there is nothing to configure.
+const lockModeSettings = new LockModeSettingsRepository(db);
+const lockCodeSlots = new LockCodeSlotRepository(db);
 const lockService = new LockService({
   readParameter: (...args) => lockGateway.readParameter(...args),
   writeParameter: (...args) => lockGateway.writeParameter(...args),
@@ -113,7 +118,11 @@ const lockService = new LockService({
   getSchedule: (...args) => lockGateway.getSchedule(...args),
   setLocked: (...args) => lockGateway.setLocked(...args),
   getLocked: (...args) => lockGateway.getLocked(...args),
-}, new LockEnrollmentRepository(db));
+}, new LockEnrollmentRepository(db), lockModeSettings);
+const lockCodeSync = new LockCodeSync(lockService, lockCodeSlots);
+startInstallerExpirySweep(userRepo, { beforeRemove: (user) => lockCodeSync.clear(user.id) });
+const lockAutomation = new LockAutomation(lockService, panelService, userRepo, eventRepo, lockModeSettings, lockCodeSlots);
+lockAutomation.start();
 const lockGateway: ZwaveLockGateway = new ZwaveLockGateway(driver, lockService);
 // KEYPAD_REQUIRE_CODE_TO_ARM is only the default; an administrator's choice (PATCH /keypad-settings) wins.
 const keypadSettings = new KeypadSettingsService(new KeypadSettingsRepository(db), {
@@ -124,7 +133,7 @@ new KeypadController(keypadService, panelService, userRepo, lockoutService, even
   guestSchedules,
 }).start();
 
-const app = createApp({ panelService, userRepo, zoneRepo, sensorRepo, lockoutService, eventRepo, alarmEvents, sirenRepo, guestSchedules, modeSchedules, haLinkRepo, driver, keypadService, keypadSettings, lockService, driverState: getDriverState });
+const app = createApp({ panelService, userRepo, zoneRepo, sensorRepo, lockoutService, eventRepo, alarmEvents, sirenRepo, guestSchedules, modeSchedules, lockModeSettings, lockCodeSync, lockCodeSlots, haLinkRepo, driver, keypadService, keypadSettings, lockService, driverState: getDriverState });
 const httpServer = createServer(app);
 
 // Shares the REST API's HTTP server/port, per contracts/websocket-events.md's
@@ -139,7 +148,7 @@ const wss = createWebSocketServer(
   },
   () => buildLiveSnapshot({ panelService, zoneRepo, keypadService, keypadSettings, lockService, driverStatus, alarmEvents, sirenRepo, modeSchedules }),
 );
-attachWsBroadcaster(wss, { panelService, sensorMapper, eventRepo, zoneRepo, keypadService, keypadSettings, lockService, driverStatus, alarmEvents, sirenRepo, modeSchedules });
+attachWsBroadcaster(wss, { panelService, sensorMapper, eventRepo, zoneRepo, keypadService, keypadSettings, lockService, driverStatus, alarmEvents, sirenRepo, modeSchedules, lockAutomation });
 
 // After the siren and broadcaster are listening: re-schedules an exit/entry delay that was in
 // flight when the service last stopped (SC-006), which may itself commit a transition.

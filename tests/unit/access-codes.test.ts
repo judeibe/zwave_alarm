@@ -248,8 +248,8 @@ describe('installer role', () => {
     expect(login.body.error.message).toContain('expired');
 
     const stop = startInstallerExpirySweep(harness.userRepo, { intervalMs: 1_000_000 });
+    await vi.waitFor(() => expect(harness.userRepo.findById(tech.id)).toBeUndefined());
     stop();
-    expect(harness.userRepo.findById(tech.id)).toBeUndefined();
   });
 
   it('removing a user who has events keeps the events', async () => {

@@ -13,7 +13,10 @@ import {
 } from '../validation.js';
 import { requireAuth, requireRole } from '../../auth/authorize.js';
 import type { GuestSchedule, GuestScheduleInput, GuestScheduleRepository } from '../../auth/guest-schedule.js';
+import { createWriteRateLimiter } from '../../auth/rate-limit.js';
 import { createLogger } from '../../config/logger.js';
+import type { LockCodeSync } from '../../locks/lock-code-sync.js';
+import type { LockCodeSlotRepository } from '../../locks/lock-code-slots.js';
 import type { EventRepository, RecordSecurityEventInput } from '../../events/event-repository.js';
 import { callerIdentity } from '../actor.js';
 import { hasCode, MAX_CODES, type CreateUserInput, type User, type UserRepository } from '../../auth/user-repository.js';
@@ -26,6 +29,10 @@ export interface UserRouteDeps {
   eventRepo: EventRepository;
   /** Serves `/users/{id}/schedules`; the routes are only mounted when supplied. */
   guestSchedules?: GuestScheduleRepository;
+  /** Pushes a code to the enrolled locks when it is set, and clears it when it is removed. */
+  lockCodeSync?: LockCodeSync;
+  /** Lets `GET /users` show which lock slot holds each user's code. */
+  lockCodeSlots?: LockCodeSlotRepository;
 }
 
 function describeSchedule(schedule: GuestSchedule): string {
@@ -49,6 +56,8 @@ interface PublicUser {
   failedAttemptCount: number;
   lockedUntil: number | null;
   createdAt: number;
+  /** Where this user's code sits on each enrolled lock (only when lock support is on). */
+  lockSlots?: { nodeId: number; slot: number; status: 'synced' | 'failed' }[];
 }
 
 function toPublicUser(user: User): PublicUser {
@@ -81,10 +90,19 @@ function toPublicUser(user: User): PublicUser {
  * the same synchronous tick (better-sqlite3 is synchronous), so two racing
  * first-run requests cannot both succeed.
  */
-export function createUserRouter({ userRepo, eventRepo, guestSchedules }: UserRouteDeps): Router {
+export function createUserRouter({ userRepo, eventRepo, guestSchedules, lockCodeSync, lockCodeSlots }: UserRouteDeps): Router {
   const router = Router();
 
   /** Writes a history event attributed to whoever made the request. Details never carry a code. */
+  const createUserLimiter = createWriteRateLimiter();
+
+  const present = (user: User): PublicUser => ({
+    ...toPublicUser(user),
+    ...(lockCodeSlots && {
+      lockSlots: lockCodeSlots.forUser(user.id).map(({ nodeId, slot, status }) => ({ nodeId, slot, status })),
+    }),
+  });
+
   const audit = (req: Request, type: RecordSecurityEventInput['type'], details: string): void => {
     eventRepo.record({ type, ...callerIdentity(req), details });
   };
@@ -92,7 +110,7 @@ export function createUserRouter({ userRepo, eventRepo, guestSchedules }: UserRo
   router.get('/users', requireAuth, requireRole('administrator'), validateQuery(usersQuerySchema), (_req, res) => {
     const { haPersonId } = parsedQuery<{ haPersonId?: string }>(res);
     const users = userRepo.list().filter((user) => haPersonId === undefined || user.haPersonId === haPersonId);
-    res.status(200).json(users.map(toPublicUser));
+    res.status(200).json(users.map(present));
   });
 
   const isLastAdministrator = (userId: string): boolean => {
@@ -137,7 +155,7 @@ export function createUserRouter({ userRepo, eventRepo, guestSchedules }: UserRo
     });
   };
 
-  router.post('/users', requireAdminUnlessFirstRun, validateBody(createUserBodySchema), (req, res) => {
+  router.post('/users', createUserLimiter, requireAdminUnlessFirstRun, validateBody(createUserBodySchema), async (req, res) => {
     const input = { ...(req.body as CreateUserInput & { confirmCode?: string }) };
     delete input.confirmCode; // only checked by the body schema
     if (res.locals.firstRunBootstrap === true && input.role !== 'administrator') {
@@ -162,7 +180,9 @@ export function createUserRouter({ userRepo, eventRepo, guestSchedules }: UserRo
       if (input.code !== undefined) {
         audit(req, 'code_added', `Code set for ${user.name} (${user.role})`);
       }
-      res.status(201).json(toPublicUser(user));
+      // The code is only known in plaintext now, so this is the moment to put it on the locks.
+      const lockSync = lockCodeSync && input.code !== undefined ? await lockCodeSync.push(user.id, input.code) : undefined;
+      res.status(201).json({ ...present(user), ...(lockCodeSync && { lockSync: lockSync ?? [] }) });
     } catch (err) {
       mapUserWriteError(err);
     }
@@ -180,7 +200,7 @@ export function createUserRouter({ userRepo, eventRepo, guestSchedules }: UserRo
         throw new ApiError(409, 'last_administrator', 'The last administrator cannot be demoted.');
       }
       try {
-        res.status(200).json(toPublicUser(userRepo.update(user.id, changes)));
+        res.status(200).json(present(userRepo.update(user.id, changes)));
       } catch (err) {
         mapUserWriteError(err);
       }
@@ -192,7 +212,7 @@ export function createUserRouter({ userRepo, eventRepo, guestSchedules }: UserRo
     requireAuth,
     requireRole('administrator'),
     validateBody(newCodeBodySchema),
-    (req, res) => {
+    async (req, res) => {
       const user = requireUser(req.params.userId);
       const { code } = req.body as { code: string };
       if (userRepo.isCodeInUse(code, user.id)) {
@@ -203,6 +223,10 @@ export function createUserRouter({ userRepo, eventRepo, guestSchedules }: UserRo
       }
       audit(req, hasCode(user) ? 'code_changed' : 'code_added', `Code ${hasCode(user) ? 'changed' : 'set'} for ${user.name}`);
       userRepo.setCode(user.id, code);
+      if (lockCodeSync) {
+        res.status(200).json({ lockSync: await lockCodeSync.push(user.id, code) });
+        return;
+      }
       res.status(204).send();
     },
   );
@@ -238,13 +262,17 @@ export function createUserRouter({ userRepo, eventRepo, guestSchedules }: UserRo
     res.status(204).send();
   });
 
-  router.delete('/users/:userId/code', requireAuth, requireRole('administrator'), (req, res) => {
+  router.delete('/users/:userId/code', requireAuth, requireRole('administrator'), async (req, res) => {
     const user = requireUser(req.params.userId);
     if (user.role === 'administrator' && isLastAdministrator(user.id)) {
       throw new ApiError(409, 'last_administrator', "The last administrator's code cannot be cleared.");
     }
     userRepo.setCode(user.id, null);
     audit(req, 'code_removed', `Code removed for ${user.name}`);
+    if (lockCodeSync) {
+      res.status(200).json({ lockSync: await lockCodeSync.clear(user.id) });
+      return;
+    }
     res.status(204).send();
   });
 
@@ -329,7 +357,9 @@ export function createUserRouter({ userRepo, eventRepo, guestSchedules }: UserRo
     });
   }
 
-  router.delete('/users/:userId', requireAuth, requireRole('administrator'), (req, res) => {
+  router.delete('/users/:userId', requireAuth, requireRole('administrator'), async (req, res) => {
+    // Take the user's code off the locks first: deleting the user would drop the record of which slot it was in.
+    await lockCodeSync?.clear(req.params.userId);
     userRepo.delete(req.params.userId);
     res.status(204).send();
   });

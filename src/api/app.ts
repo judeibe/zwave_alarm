@@ -12,6 +12,9 @@ import type { PanelService } from '../alarm/panel-service.js';
 import type { AlarmEventService } from '../alarm/alarm-event-service.js';
 import type { SirenRepository } from '../alarm/siren-repository.js';
 import type { GuestScheduleRepository } from '../auth/guest-schedule.js';
+import type { LockModeSettingsRepository } from '../locks/lock-mode-settings.js';
+import type { LockCodeSync } from '../locks/lock-code-sync.js';
+import type { LockCodeSlotRepository } from '../locks/lock-code-slots.js';
 import type { ModeScheduleRepository } from '../alarm/mode-schedule.js';
 import { createModeScheduleRouter } from './routes/mode-schedule-routes.js';
 import { createSirenRouter } from './routes/siren-routes.js';
@@ -112,6 +115,12 @@ export interface AppDeps {
   sirenRepo?: SirenRepository;
   /** Optional: `/users/{id}/schedules` is mounted only when supplied. */
   guestSchedules?: GuestScheduleRepository;
+  /** Optional: `/locks/{id}/mode-settings` is mounted only when supplied (with `lockService`). */
+  lockModeSettings?: LockModeSettingsRepository;
+  /** Optional: pushes user codes to the enrolled locks when they are set or removed. */
+  lockCodeSync?: LockCodeSync;
+  /** Optional: lets `GET /users` show which lock slot holds each user's code. */
+  lockCodeSlots?: LockCodeSlotRepository;
   /** Optional: `/mode-schedules` is mounted only when supplied. */
   modeSchedules?: ModeScheduleRepository;
   haLinkRepo: HaLinkRepository;
@@ -186,6 +195,8 @@ export function createApp(deps?: AppDeps): Express {
       eventRepo: deps.eventRepo,
       alarmEvents: deps.alarmEvents,
       guestSchedules: deps.guestSchedules,
+      lockCodeSync: deps.lockCodeSync,
+      lockCodeSlots: deps.lockCodeSlots,
       haLinkRepo: deps.haLinkRepo,
       driver: deps.driver,
       driverState: deps.driverState,
@@ -201,7 +212,7 @@ export function createApp(deps?: AppDeps): Express {
       app.use('/api/v1', createKeypadRouter({ keypadService: deps.keypadService, keypadSettings: deps.keypadSettings }));
     }
     if (deps.lockService) {
-      app.use('/api/v1', createLockRouter({ lockService: deps.lockService }));
+      app.use('/api/v1', createLockRouter({ lockService: deps.lockService, modeSettings: deps.lockModeSettings }));
     }
     if (deps.modeSchedules) {
       app.use('/api/v1', createModeScheduleRouter({ modeSchedules: deps.modeSchedules, eventRepo: deps.eventRepo }));

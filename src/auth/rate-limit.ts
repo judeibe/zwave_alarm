@@ -31,6 +31,24 @@ const DEFAULT_WINDOW_MS = 60_000;
  * Behind a reverse proxy, set Express's `trust proxy` so `req.ip` is the real
  * client rather than the proxy, otherwise every client shares one budget.
  */
+/**
+ * Per-IP ceiling on account creation, `POST /api/v1/users`: 30 requests a minute, successful or not. It is
+ * generous for an administrator setting people up, and bounds the one unauthenticated path (the first-run
+ * bootstrap) and anything that gets hold of an administrator session.
+ */
+export function createWriteRateLimiter(options: { limit?: number; windowMs?: number } = {}): RequestHandler {
+  return rateLimit({
+    windowMs: options.windowMs ?? DEFAULT_WINDOW_MS,
+    limit: options.limit ?? 30,
+    standardHeaders: 'draft-7',
+    legacyHeaders: false,
+    handler: (req, _res, next) => {
+      logger.warn('write rate limit exceeded', { ip: req.ip });
+      next(new ApiError(429, 'too_many_requests', 'Too many requests. Try again in a minute.'));
+    },
+  });
+}
+
 export function createLoginRateLimiter(options: LoginRateLimitOptions = {}): RequestHandler {
   return rateLimit({
     windowMs: options.windowMs ?? DEFAULT_WINDOW_MS,
