@@ -1,7 +1,7 @@
 import { Router, type Request } from 'express';
 import { ApiError } from '../app.js';
 import { asyncHandler } from '../async-handler.js';
-import { armBodySchema, codeBodySchema, validateBody } from '../validation.js';
+import { armBodySchema, codeBodySchema, updateModesBodySchema, validateBody } from '../validation.js';
 import { isAuthRequired, requireAuth, requireRole } from '../../auth/authorize.js';
 import { CommandRejectedError, type CommandSource } from '../../alarm/dispatcher.js';
 import { PanelStateError, type ArmMode, type PanelService } from '../../alarm/panel-service.js';
@@ -59,7 +59,17 @@ export function createPanelRouter({
   // The Z-Wave driver's state rides along so a client can tell "service up, driver down" from "service down".
   router.get('/panel', requireAuth, requireRole('administrator', 'member'), (_req, res) => {
     const panel = panelService.getState();
-    res.status(200).json(driverState ? { ...panel, driver: driverState() } : panel);
+    const body = { ...panel, modes: panelService.getModes() };
+    res.status(200).json(driverState ? { ...body, driver: driverState() } : body);
+  });
+
+  // Per-mode entry/exit delay (0-180 s). Keyed by armed mode: { armed_home: { entryDelaySec, exitDelaySec }, armed_away: {...} }.
+  router.get('/modes', requireAuth, requireRole('administrator', 'member'), (_req, res) => {
+    res.status(200).json(panelService.getModes());
+  });
+
+  router.patch('/modes', requireAuth, requireRole('administrator'), validateBody(updateModesBodySchema), (req, res) => {
+    res.status(200).json(panelService.updateModes(req.body as Parameters<PanelService['updateModes']>[0]));
   });
 
   router.post(

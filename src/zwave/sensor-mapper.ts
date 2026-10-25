@@ -186,7 +186,7 @@ export class SensorMapper extends EventEmitter {
     const updated = this.sensorRepo.updateState(sensor.id, { currentState: nextState });
     this.emit('sensor_changed', updated);
     if (nextState === 'breached') {
-      this.panelService.reportSensorBreach({ id: updated.id, zoneId: updated.zoneId, category: updated.category });
+      this.panelService.reportSensorBreach(updated);
     }
   }
 

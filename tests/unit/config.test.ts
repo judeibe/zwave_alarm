@@ -69,12 +69,13 @@ describe('config loader', () => {
       delete process.env.ENTRY_DELAY_SECONDS;
     });
 
-    it('defaults both delays to 30 seconds', async () => {
+    it('leaves both delay seeds unset when the env vars are absent', async () => {
       setEnv();
 
       const { config } = await import('../../src/config/index.js');
 
-      expect(config).toMatchObject({ exitDelaySeconds: 30, entryDelaySeconds: 30 });
+      expect(config.exitDelaySeconds).toBeUndefined();
+      expect(config.entryDelaySeconds).toBeUndefined();
     });
 
     it('reads them independently, treating an empty value as unset', async () => {
@@ -84,25 +85,26 @@ describe('config loader', () => {
 
       const { config } = await import('../../src/config/index.js');
 
-      expect(config).toMatchObject({ exitDelaySeconds: 60, entryDelaySeconds: 30 });
+      expect(config.exitDelaySeconds).toBe(60);
+      expect(config.entryDelaySeconds).toBeUndefined();
     });
 
-    it('accepts 0 (no delay) and the 600 second maximum', async () => {
+    it('accepts 0 (no delay) and the 180 second maximum', async () => {
       setEnv();
       process.env.EXIT_DELAY_SECONDS = '0';
-      process.env.ENTRY_DELAY_SECONDS = '600';
+      process.env.ENTRY_DELAY_SECONDS = '180';
 
       const { config } = await import('../../src/config/index.js');
 
-      expect(config).toMatchObject({ exitDelaySeconds: 0, entryDelaySeconds: 600 });
+      expect(config).toMatchObject({ exitDelaySeconds: 0, entryDelaySeconds: 180 });
     });
 
-    it.each(['-1', '601', '1.5', 'soon'])('rejects EXIT_DELAY_SECONDS=%s', async (value) => {
+    it.each(['-1', '181', '1.5', 'soon'])('rejects EXIT_DELAY_SECONDS=%s', async (value) => {
       setEnv();
       process.env.EXIT_DELAY_SECONDS = value;
 
       await expect(import('../../src/config/index.js')).rejects.toThrow(
-        new RegExp(`EXIT_DELAY_SECONDS must be a whole number of seconds between 0 and 600, got "${value}"`),
+        new RegExp(`EXIT_DELAY_SECONDS must be a whole number of seconds between 0 and 180, got "${value}"`),
       );
     });
 
@@ -130,8 +132,8 @@ describe('config loader', () => {
       zwaveServerHost: '0.0.0.0',
       sessionSecret: 'test-secret-0123456789abcdef0123456789',
       sirenNodeId: null,
-      exitDelaySeconds: 30,
-      entryDelaySeconds: 30,
+      exitDelaySeconds: undefined,
+      entryDelaySeconds: undefined,
       securityKeys: {},
       securityKeysLongRange: {},
       apiAuthRequired: false,

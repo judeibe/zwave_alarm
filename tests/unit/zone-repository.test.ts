@@ -49,6 +49,10 @@ describe('ZoneRepository', () => {
         currentState: 'normal',
         batteryLevel: 90,
         connectivityStatus: 'online',
+        placement: null,
+        armedHome: true,
+        armedAway: true,
+        alertsOnly: false,
         updatedAt: 0,
       },
     ]);

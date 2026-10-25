@@ -316,6 +316,27 @@ describe('zone routes', () => {
       expect((await agent.delete('/api/v1/sensors/x')).status).toBe(403);
     });
 
+    it('sets placement and per-mode armed flags, resetting flags to the placement defaults on a new placement', async () => {
+      const { app, userRepo, nodeMap } = await buildHarness();
+      const agent = await loginAs(app, userRepo, 'administrator', 'admin1');
+      nodeMap.add(8);
+      const zone = (await agent.post('/api/v1/zones').send({ name: 'One' })).body;
+      const created = await agent
+        .post(`/api/v1/zones/${zone.id}/sensors`)
+        .send({ zwaveNodeId: 8, name: 'Hall', category: 'intrusion' });
+      expect(created.body).toMatchObject({ placement: 'MAIN_DOOR', armedHome: true, armedAway: true, alertsOnly: false });
+
+      const motion = await agent.patch(`/api/v1/sensors/${created.body.id}`).send({ placement: 'ROOM' });
+      const custom = await agent.patch(`/api/v1/sensors/${created.body.id}`).send({ armed: { home: true } });
+      const bad = await agent.patch(`/api/v1/sensors/${created.body.id}`).send({ placement: 'GARAGE' });
+      const lifeSafety = await agent.patch(`/api/v1/sensors/${created.body.id}`).send({ category: 'life-safety', placement: 'ROOM' });
+
+      expect(motion.body).toMatchObject({ placement: 'ROOM', armedHome: false, armedAway: true });
+      expect(custom.body).toMatchObject({ placement: 'ROOM', armedHome: true, armedAway: true });
+      expect(bad.status).toBe(400);
+      expect(lifeSafety.status).toBe(400);
+    });
+
     it('moves, renames and unassigns a sensor', async () => {
       const { app, userRepo, nodeMap } = await buildHarness();
       const agent = await loginAs(app, userRepo, 'administrator', 'admin1');

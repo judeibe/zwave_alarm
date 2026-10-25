@@ -14,7 +14,7 @@ import {
 import { requireAuth, requireRole } from '../../auth/authorize.js';
 import type { UserRepository } from '../../auth/user-repository.js';
 import type { ZoneRepository } from '../../db/repositories/zone-repository.js';
-import type { SensorCategory, SensorRepository } from '../../db/repositories/sensor-repository.js';
+import type { SensorCategory, SensorPlacement, SensorRepository } from '../../db/repositories/sensor-repository.js';
 
 export interface ZoneRouteDeps {
   zoneRepo: ZoneRepository;
@@ -37,6 +37,9 @@ interface AssignSensorBody {
   zwaveNodeId: number;
   name: string;
   category: SensorCategory;
+  placement?: SensorPlacement;
+  armed?: { home?: boolean; away?: boolean };
+  alertsOnly?: boolean;
 }
 
 /**
@@ -136,10 +139,26 @@ export function createZoneRouter({ zoneRepo, sensorRepo, userRepo, driver }: Zon
     requireRole('administrator'),
     validateBody(updateSensorBodySchema),
     (req, res) => {
-      const changes = req.body as { name?: string; category?: SensorCategory; zoneId?: string };
-      if (!sensorRepo.findById(req.params.sensorId)) {
+      const { armed, ...rest } = req.body as {
+        name?: string;
+        category?: SensorCategory;
+        zoneId?: string;
+        placement?: SensorPlacement;
+        alertsOnly?: boolean;
+        armed?: { home?: boolean; away?: boolean };
+      };
+      const existing = sensorRepo.findById(req.params.sensorId);
+      if (!existing) {
         throw new ApiError(404, 'not_found', `Sensor ${req.params.sensorId} does not exist.`);
       }
+      if (rest.placement !== undefined && (rest.category ?? existing.category) === 'life-safety') {
+        throw new ApiError(400, 'bad_request', 'Life-safety sensors have no placement.');
+      }
+      const changes = {
+        ...rest,
+        ...(armed?.home !== undefined && { armedHome: armed.home }),
+        ...(armed?.away !== undefined && { armedAway: armed.away }),
+      };
       if (changes.zoneId !== undefined && !zoneRepo.findById(changes.zoneId)) {
         throw new ApiError(404, 'not_found', `Zone ${changes.zoneId} does not exist.`);
       }
@@ -161,7 +180,7 @@ export function createZoneRouter({ zoneRepo, sensorRepo, userRepo, driver }: Zon
     requireRole('administrator'),
     validateBody(assignSensorBodySchema),
     (req, res) => {
-      const { zwaveNodeId, name, category } = req.body as AssignSensorBody;
+      const { zwaveNodeId, name, category, placement, armed, alertsOnly } = req.body as AssignSensorBody;
 
       let nodeIsKnown: boolean;
       try {
@@ -177,7 +196,16 @@ export function createZoneRouter({ zoneRepo, sensorRepo, userRepo, driver }: Zon
       }
 
       try {
-        const sensor = sensorRepo.create({ zwaveNodeId, zoneId: req.params.zoneId, name, category });
+        const sensor = sensorRepo.create({
+          zwaveNodeId,
+          zoneId: req.params.zoneId,
+          name,
+          category,
+          placement,
+          armedHome: armed?.home,
+          armedAway: armed?.away,
+          alertsOnly,
+        });
         res.status(201).json(sensor);
       } catch (err) {
         if (err instanceof Error && err.message.includes('already assigned')) {

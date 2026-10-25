@@ -41,6 +41,7 @@ export function buildLiveSnapshot(deps: Pick<WsBroadcasterDeps, 'panelService' |
   return {
     type: 'snapshot',
     panel: { mode: panel.mode, pendingDelayEndsAt: panel.pendingDelayEndsAt, disarmedZoneIds: panel.disarmedZoneIds },
+    modes: deps.panelService.getModes(),
     zones: deps.zoneRepo.list(),
     ...(deps.keypadService && { keypads: deps.keypadService.list() }),
     ...(deps.keypadSettings && { keypadSettings: deps.keypadSettings.get() }),
@@ -88,6 +89,7 @@ export function attachWsBroadcaster(wss: WebSocketServer, deps: WsBroadcasterDep
       mode: panel.mode,
       pendingDelayEndsAt: panel.pendingDelayEndsAt,
       disarmedZoneIds: panel.disarmedZoneIds,
+      modes: deps.panelService.getModes(),
       triggeredBy: resolveTriggeredBy(deps.eventRepo, panel.triggeredBy),
     });
   });
