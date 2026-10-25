@@ -1,15 +1,18 @@
 import { Router, type NextFunction, type Request, type Response } from 'express';
 import { ApiError } from '../app.js';
 import {
+  createScheduleBodySchema,
   createUserBodySchema,
   newCodeBodySchema,
   parsedQuery,
+  updateScheduleBodySchema,
   updateUserBodySchema,
   usersQuerySchema,
   validateBody,
   validateQuery,
 } from '../validation.js';
 import { requireAuth, requireRole } from '../../auth/authorize.js';
+import type { GuestSchedule, GuestScheduleInput, GuestScheduleRepository } from '../../auth/guest-schedule.js';
 import { createLogger } from '../../config/logger.js';
 import { hasCode, MAX_CODES, type CreateUserInput, type User, type UserRepository } from '../../auth/user-repository.js';
 
@@ -17,6 +20,8 @@ const logger = createLogger('api/users');
 
 export interface UserRouteDeps {
   userRepo: UserRepository;
+  /** Serves `/users/{id}/schedules`; the routes are only mounted when supplied. */
+  guestSchedules?: GuestScheduleRepository;
 }
 
 /** Public-facing User shape: never leaks `credentialHash` (contracts/rest-api.md's Users section). */
@@ -67,7 +72,7 @@ function toPublicUser(user: User): PublicUser {
  * the same synchronous tick (better-sqlite3 is synchronous), so two racing
  * first-run requests cannot both succeed.
  */
-export function createUserRouter({ userRepo }: UserRouteDeps): Router {
+export function createUserRouter({ userRepo, guestSchedules }: UserRouteDeps): Router {
   const router = Router();
 
   router.get('/users', requireAuth, requireRole('administrator'), validateQuery(usersQuerySchema), (_req, res) => {
@@ -221,6 +226,81 @@ export function createUserRouter({ userRepo }: UserRouteDeps): Router {
     userRepo.setCode(user.id, null);
     res.status(204).send();
   });
+
+  if (guestSchedules) {
+    // When a guest's code works at the keypad. A guest with no schedule has unlimited access; schedules are
+    // not enforced on locks or on the app (guests have no app account). Owner only.
+    const requireGuest = (userId: string): User => {
+      const user = requireUser(userId);
+      if (user.role !== 'guest') {
+        throw new ApiError(400, 'bad_request', 'Only a guest has access schedules.');
+      }
+      return user;
+    };
+
+    /** Applies the rules the body schema can't express across fields, and returns the clean input. */
+    const checkedSchedule = (next: GuestScheduleInput): GuestScheduleInput => {
+      if (next.allDay) {
+        return { ...next, start: null, end: null };
+      }
+      if (next.start === null || next.end === null) {
+        throw new ApiError(400, 'bad_request', '"start" and "end" are required unless "allDay" is true.');
+      }
+      if (next.start === next.end) {
+        throw new ApiError(400, 'bad_request', '"start" and "end" must differ; use "allDay" for the whole day.');
+      }
+      return next;
+    };
+
+    router.get('/users/:userId/schedules', requireAuth, requireRole('administrator'), (req, res) => {
+      res.status(200).json(guestSchedules.listForUser(requireGuest(req.params.userId).id));
+    });
+
+    router.post(
+      '/users/:userId/schedules',
+      requireAuth,
+      requireRole('administrator'),
+      validateBody(createScheduleBodySchema),
+      (req, res) => {
+        const user = requireGuest(req.params.userId);
+        const body = req.body as Partial<GuestScheduleInput> & Pick<GuestScheduleInput, 'name' | 'days'>;
+        const input = checkedSchedule({
+          name: body.name,
+          days: body.days,
+          allDay: body.allDay ?? false,
+          start: body.start ?? null,
+          end: body.end ?? null,
+          timeZone: body.timeZone ?? null,
+        });
+        res.status(201).json(guestSchedules.create(user.id, input));
+      },
+    );
+
+    router.patch(
+      '/users/:userId/schedules/:scheduleId',
+      requireAuth,
+      requireRole('administrator'),
+      validateBody(updateScheduleBodySchema),
+      (req, res) => {
+        const user = requireGuest(req.params.userId);
+        const current = guestSchedules.findById(user.id, req.params.scheduleId);
+        if (!current) {
+          throw new ApiError(404, 'not_found', `Schedule ${req.params.scheduleId} does not exist.`);
+        }
+        const merged = checkedSchedule({ ...current, ...(req.body as Partial<GuestScheduleInput>) });
+        const updated: GuestSchedule = { ...current, ...merged };
+        res.status(200).json(guestSchedules.update(updated));
+      },
+    );
+
+    router.delete('/users/:userId/schedules/:scheduleId', requireAuth, requireRole('administrator'), (req, res) => {
+      const user = requireGuest(req.params.userId);
+      if (!guestSchedules.delete(user.id, req.params.scheduleId)) {
+        throw new ApiError(404, 'not_found', `Schedule ${req.params.scheduleId} does not exist.`);
+      }
+      res.status(204).send();
+    });
+  }
 
   router.delete('/users/:userId', requireAuth, requireRole('administrator'), (req, res) => {
     userRepo.delete(req.params.userId);

@@ -2,6 +2,7 @@ import { createLogger } from '../config/logger.js';
 import type { AlarmPanel } from '../alarm/panel-repository.js';
 import { PanelStateError, type PanelService } from '../alarm/panel-service.js';
 import { CommandRejectedError } from '../alarm/dispatcher.js';
+import { isWithinSchedules, type GuestScheduleRepository } from '../auth/guest-schedule.js';
 import { isExpired, type User, type UserRepository } from '../auth/user-repository.js';
 import type { LockoutService } from '../auth/lockout-service.js';
 import type { EventRepository } from '../events/event-repository.js';
@@ -16,6 +17,8 @@ export interface KeypadControllerOptions {
   requireCodeToArm: () => boolean;
   /** Clock, injectable so the delay countdown is testable. */
   now?: () => number;
+  /** When supplied, a guest's code works at the keypad only inside one of their schedules (none = always). */
+  guestSchedules?: GuestScheduleRepository;
 }
 
 /**
@@ -182,6 +185,20 @@ this.panelService.raiseEmergency(
     if (isExpired(user, this.now())) {
       logger.warn('keypad code rejected: access expired', { userId: user.id, role: user.role });
       return undefined;
+    }
+    if (user.role === 'guest' && this.options.guestSchedules) {
+      if (!isWithinSchedules(this.options.guestSchedules.listForUser(user.id), this.now())) {
+        // Rejected like a wrong code, but recorded so the owner and shared users are told (Ring spec, Access).
+        logger.warn('keypad code rejected: guest is outside their schedule', { userId: user.id });
+        this.eventRepo.record({
+          type: 'guest_code_used',
+          source: 'user',
+          sourceUserId: user.id,
+          relatedZoneId: user.guestZoneId,
+          details: `Guest ${user.name} tried to use their code outside their schedule`,
+        });
+        return undefined;
+      }
     }
     this.userRepo.resetFailedAttempts(user.id);
     return { user, duress };

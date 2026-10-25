@@ -6,6 +6,7 @@ import {
   OUTDOOR_MIN_DURATION_SEC,
   SIREN_KINDS,
 } from '../alarm/siren-repository.js';
+import { isValidTimeZone, WEEKDAYS } from '../auth/guest-schedule.js';
 import { SENSOR_PLACEMENTS } from '../db/repositories/sensor-repository.js';
 import { MODE_DELAY_MAX_SEC, MODE_DELAY_MIN_SEC } from '../db/repositories/mode-config-repository.js';
 
@@ -151,6 +152,44 @@ export const updateUserBodySchema = z
     haUserId: haId.nullable(),
     guestExpiresAt: guestExpiresAt.nullable(),
     guestZoneId: z.string().min(1).nullable(),
+  })
+  .partial()
+  .refine(nonEmpty, NON_EMPTY_MESSAGE);
+
+const clockTime = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'must be HH:MM, 24 h');
+const weekdays = z
+  .array(z.enum(WEEKDAYS))
+  .min(1, 'must name at least one day')
+  .refine((days) => new Set(days).size === days.length, 'must not repeat a day');
+const timeZone = z.string().refine(isValidTimeZone, 'must be an IANA time zone, e.g. America/Chicago');
+
+/**
+ * `POST /api/v1/users/{userId}/schedules` body. Unless `allDay` is true, both `start` and `end` (`HH:MM`) are
+ * required; an `end` at or before `start` is an overnight window. `timeZone` defaults to the server's own.
+ */
+export const createScheduleBodySchema = z
+  .object({
+    name,
+    days: weekdays,
+    allDay: z.boolean().optional(),
+    start: clockTime.optional(),
+    end: clockTime.optional(),
+    timeZone: timeZone.nullable().optional(),
+  })
+  .refine((body) => body.allDay === true || (body.start !== undefined && body.end !== undefined), {
+    message: '"start" and "end" are required unless "allDay" is true',
+    path: ['start'],
+  });
+
+/** `PATCH /api/v1/users/{userId}/schedules/{scheduleId}` body: any field above; the route re-checks the merged result. */
+export const updateScheduleBodySchema = z
+  .object({
+    name,
+    days: weekdays,
+    allDay: z.boolean(),
+    start: clockTime.nullable(),
+    end: clockTime.nullable(),
+    timeZone: timeZone.nullable(),
   })
   .partial()
   .refine(nonEmpty, NON_EMPTY_MESSAGE);

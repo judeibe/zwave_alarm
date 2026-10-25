@@ -18,6 +18,7 @@ import { PanelService } from './alarm/panel-service.js';
 import { startInstallerExpirySweep } from './auth/installer-expiry.js';
 import { AlarmEventRepository } from './alarm/alarm-event-repository.js';
 import { AlarmEventService } from './alarm/alarm-event-service.js';
+import { GuestScheduleRepository } from './auth/guest-schedule.js';
 import { SirenRepository } from './alarm/siren-repository.js';
 import { Siren } from './alarm/siren.js';
 import { EventRepository } from './events/event-repository.js';
@@ -58,6 +59,7 @@ const modeConfigRepo = new ModeConfigRepository(db);
 modeConfigRepo.ensureSeeded({ exitDelaySec: config.exitDelaySeconds, entryDelaySec: config.entryDelaySeconds });
 const alarmEvents = new AlarmEventService(new AlarmEventRepository(db));
 const sirenRepo = new SirenRepository(db);
+const guestSchedules = new GuestScheduleRepository(db);
 // SIREN_NODE_ID only seeds the first base siren; afterwards sirens are managed with /api/v1/sirens.
 sirenRepo.seedBase(config.sirenNodeId);
 const panelService = new PanelService(panelRepo, eventRepo, { modeConfig: modeConfigRepo, sensorRepo, alarmEvents });
@@ -117,9 +119,10 @@ const keypadSettings = new KeypadSettingsService(new KeypadSettingsRepository(db
 });
 new KeypadController(keypadService, panelService, userRepo, lockoutService, eventRepo, zoneRepo, {
   requireCodeToArm: () => keypadSettings.get().requireCodeToArm,
+  guestSchedules,
 }).start();
 
-const app = createApp({ panelService, userRepo, zoneRepo, sensorRepo, lockoutService, eventRepo, alarmEvents, sirenRepo, haLinkRepo, driver, keypadService, keypadSettings, lockService, driverState: getDriverState });
+const app = createApp({ panelService, userRepo, zoneRepo, sensorRepo, lockoutService, eventRepo, alarmEvents, sirenRepo, guestSchedules, haLinkRepo, driver, keypadService, keypadSettings, lockService, driverState: getDriverState });
 const httpServer = createServer(app);
 
 // Shares the REST API's HTTP server/port, per contracts/websocket-events.md's
