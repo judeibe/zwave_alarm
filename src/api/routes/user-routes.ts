@@ -13,6 +13,7 @@ import {
 } from '../validation.js';
 import { requireAuth, requireRole } from '../../auth/authorize.js';
 import type { GuestSchedule, GuestScheduleInput, GuestScheduleRepository } from '../../auth/guest-schedule.js';
+import { createWriteRateLimiter } from '../../auth/rate-limit.js';
 import { createLogger } from '../../config/logger.js';
 import type { LockCodeSync } from '../../locks/lock-code-sync.js';
 import type { LockCodeSlotRepository } from '../../locks/lock-code-slots.js';
@@ -93,6 +94,8 @@ export function createUserRouter({ userRepo, eventRepo, guestSchedules, lockCode
   const router = Router();
 
   /** Writes a history event attributed to whoever made the request. Details never carry a code. */
+  const createUserLimiter = createWriteRateLimiter();
+
   const present = (user: User): PublicUser => ({
     ...toPublicUser(user),
     ...(lockCodeSlots && {
@@ -152,7 +155,7 @@ export function createUserRouter({ userRepo, eventRepo, guestSchedules, lockCode
     });
   };
 
-  router.post('/users', requireAdminUnlessFirstRun, validateBody(createUserBodySchema), async (req, res) => {
+  router.post('/users', createUserLimiter, requireAdminUnlessFirstRun, validateBody(createUserBodySchema), async (req, res) => {
     const input = { ...(req.body as CreateUserInput & { confirmCode?: string }) };
     delete input.confirmCode; // only checked by the body schema
     if (res.locals.firstRunBootstrap === true && input.role !== 'administrator') {

@@ -209,3 +209,25 @@ describe('codes pushed to locks through the user routes', () => {
     expect(created.body.lockSync).toEqual([]);
   });
 });
+
+describe('account creation throttle', () => {
+  const originalEnv = { ...process.env };
+
+  beforeEach(setEnv);
+  afterEach(() => {
+    process.env = { ...originalEnv };
+  });
+
+  it('answers 429 after 30 POST /users from one IP in a minute', async () => {
+    const { app, userRepo } = await buildHarness();
+    const agent = await loginAs(app, userRepo, 'administrator', '4141');
+
+    for (let i = 0; i < 30; i += 1) {
+      expect((await agent.post('/api/v1/users').send({ name: `U${String(i)}`, role: 'member' })).status).toBe(201);
+    }
+    const limited = await agent.post('/api/v1/users').send({ name: 'One too many', role: 'member' });
+
+    expect(limited.status).toBe(429);
+    expect(limited.body.error.code).toBe('too_many_requests');
+  });
+});
