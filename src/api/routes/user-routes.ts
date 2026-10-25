@@ -14,14 +14,23 @@ import {
 import { requireAuth, requireRole } from '../../auth/authorize.js';
 import type { GuestSchedule, GuestScheduleInput, GuestScheduleRepository } from '../../auth/guest-schedule.js';
 import { createLogger } from '../../config/logger.js';
+import type { EventRepository, RecordSecurityEventInput } from '../../events/event-repository.js';
+import { callerIdentity } from '../actor.js';
 import { hasCode, MAX_CODES, type CreateUserInput, type User, type UserRepository } from '../../auth/user-repository.js';
 
 const logger = createLogger('api/users');
 
 export interface UserRouteDeps {
   userRepo: UserRepository;
+  /** Receives the history events for code and guest-schedule changes. */
+  eventRepo: EventRepository;
   /** Serves `/users/{id}/schedules`; the routes are only mounted when supplied. */
   guestSchedules?: GuestScheduleRepository;
+}
+
+function describeSchedule(schedule: GuestSchedule): string {
+  const when = schedule.allDay ? 'all day' : `${schedule.start ?? '?'}-${schedule.end ?? '?'}`;
+  return `"${schedule.name}" (${schedule.days.join(',')} ${when})`;
 }
 
 /** Public-facing User shape: never leaks `credentialHash` (contracts/rest-api.md's Users section). */
@@ -72,8 +81,13 @@ function toPublicUser(user: User): PublicUser {
  * the same synchronous tick (better-sqlite3 is synchronous), so two racing
  * first-run requests cannot both succeed.
  */
-export function createUserRouter({ userRepo, guestSchedules }: UserRouteDeps): Router {
+export function createUserRouter({ userRepo, eventRepo, guestSchedules }: UserRouteDeps): Router {
   const router = Router();
+
+  /** Writes a history event attributed to whoever made the request. Details never carry a code. */
+  const audit = (req: Request, type: RecordSecurityEventInput['type'], details: string): void => {
+    eventRepo.record({ type, ...callerIdentity(req), details });
+  };
 
   router.get('/users', requireAuth, requireRole('administrator'), validateQuery(usersQuerySchema), (_req, res) => {
     const { haPersonId } = parsedQuery<{ haPersonId?: string }>(res);
@@ -145,6 +159,9 @@ export function createUserRouter({ userRepo, guestSchedules }: UserRouteDeps): R
       if (res.locals.firstRunBootstrap === true) {
         logger.info('first administrator created via first-run bootstrap', { userId: user.id });
       }
+      if (input.code !== undefined) {
+        audit(req, 'code_added', `Code set for ${user.name} (${user.role})`);
+      }
       res.status(201).json(toPublicUser(user));
     } catch (err) {
       mapUserWriteError(err);
@@ -184,6 +201,7 @@ export function createUserRouter({ userRepo, guestSchedules }: UserRouteDeps): R
       if (!hasCode(user) && userRepo.countCodes() >= MAX_CODES) {
         throw new ApiError(409, 'code_limit', `A location holds at most ${String(MAX_CODES)} codes.`);
       }
+      audit(req, hasCode(user) ? 'code_changed' : 'code_added', `Code ${hasCode(user) ? 'changed' : 'set'} for ${user.name}`);
       userRepo.setCode(user.id, code);
       res.status(204).send();
     },
@@ -208,6 +226,7 @@ export function createUserRouter({ userRepo, guestSchedules }: UserRouteDeps): R
         throw new ApiError(409, 'code_limit', `A location holds at most ${String(MAX_CODES)} codes.`);
       }
       userRepo.setDuressCode(user.id, code);
+      audit(req, 'duress_code_set', `Duress code set for ${user.name}`);
       res.status(204).send();
     },
   );
@@ -215,6 +234,7 @@ export function createUserRouter({ userRepo, guestSchedules }: UserRouteDeps): R
   router.delete('/users/:userId/duress-code', requireAuth, requireRole('administrator'), (req, res) => {
     const user = requireUser(req.params.userId);
     userRepo.setDuressCode(user.id, null);
+    audit(req, 'duress_code_removed', `Duress code removed for ${user.name}`);
     res.status(204).send();
   });
 
@@ -224,6 +244,7 @@ export function createUserRouter({ userRepo, guestSchedules }: UserRouteDeps): R
       throw new ApiError(409, 'last_administrator', "The last administrator's code cannot be cleared.");
     }
     userRepo.setCode(user.id, null);
+    audit(req, 'code_removed', `Code removed for ${user.name}`);
     res.status(204).send();
   });
 
@@ -272,7 +293,9 @@ export function createUserRouter({ userRepo, guestSchedules }: UserRouteDeps): R
           end: body.end ?? null,
           timeZone: body.timeZone ?? null,
         });
-        res.status(201).json(guestSchedules.create(user.id, input));
+        const created = guestSchedules.create(user.id, input);
+        audit(req, 'guest_schedule_added', `Schedule ${describeSchedule(created)} added for ${user.name}`);
+        res.status(201).json(created);
       },
     );
 
@@ -289,15 +312,19 @@ export function createUserRouter({ userRepo, guestSchedules }: UserRouteDeps): R
         }
         const merged = checkedSchedule({ ...current, ...(req.body as Partial<GuestScheduleInput>) });
         const updated: GuestSchedule = { ...current, ...merged };
-        res.status(200).json(guestSchedules.update(updated));
+        guestSchedules.update(updated);
+        audit(req, 'guest_schedule_updated', `Schedule ${describeSchedule(updated)} changed for ${user.name}`);
+        res.status(200).json(updated);
       },
     );
 
     router.delete('/users/:userId/schedules/:scheduleId', requireAuth, requireRole('administrator'), (req, res) => {
       const user = requireGuest(req.params.userId);
-      if (!guestSchedules.delete(user.id, req.params.scheduleId)) {
+      const existing = guestSchedules.findById(user.id, req.params.scheduleId);
+      if (!existing || !guestSchedules.delete(user.id, req.params.scheduleId)) {
         throw new ApiError(404, 'not_found', `Schedule ${req.params.scheduleId} does not exist.`);
       }
+      audit(req, 'guest_schedule_removed', `Schedule ${describeSchedule(existing)} removed for ${user.name}`);
       res.status(204).send();
     });
   }

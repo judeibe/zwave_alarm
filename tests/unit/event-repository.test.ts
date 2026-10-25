@@ -49,12 +49,12 @@ describe('EventRepository', () => {
     expect(event.details).toBe('Sensor breached while armed_away');
   });
 
-  it('rejects an unknown event type via the CHECK constraint', () => {
+  it('rejects an unknown event type', () => {
     const repo = new EventRepository(createDatabase(':memory:'));
 
     expect(() =>
       repo.record({ type: 'not_a_real_type' as unknown as 'armed', source: 'user' }),
-    ).toThrow(/CHECK constraint failed/);
+    ).toThrow(/unknown security event type/);
   });
 
   it('list returns events newest-first', () => {

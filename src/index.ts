@@ -18,6 +18,7 @@ import { PanelService } from './alarm/panel-service.js';
 import { startInstallerExpirySweep } from './auth/installer-expiry.js';
 import { AlarmEventRepository } from './alarm/alarm-event-repository.js';
 import { AlarmEventService } from './alarm/alarm-event-service.js';
+import { ModeScheduleRepository, ModeScheduleRunner } from './alarm/mode-schedule.js';
 import { GuestScheduleRepository } from './auth/guest-schedule.js';
 import { SirenRepository } from './alarm/siren-repository.js';
 import { Siren } from './alarm/siren.js';
@@ -60,6 +61,7 @@ modeConfigRepo.ensureSeeded({ exitDelaySec: config.exitDelaySeconds, entryDelayS
 const alarmEvents = new AlarmEventService(new AlarmEventRepository(db));
 const sirenRepo = new SirenRepository(db);
 const guestSchedules = new GuestScheduleRepository(db);
+const modeSchedules = new ModeScheduleRepository(db);
 // SIREN_NODE_ID only seeds the first base siren; afterwards sirens are managed with /api/v1/sirens.
 sirenRepo.seedBase(config.sirenNodeId);
 const panelService = new PanelService(panelRepo, eventRepo, { modeConfig: modeConfigRepo, sensorRepo, alarmEvents });
@@ -122,7 +124,7 @@ new KeypadController(keypadService, panelService, userRepo, lockoutService, even
   guestSchedules,
 }).start();
 
-const app = createApp({ panelService, userRepo, zoneRepo, sensorRepo, lockoutService, eventRepo, alarmEvents, sirenRepo, guestSchedules, haLinkRepo, driver, keypadService, keypadSettings, lockService, driverState: getDriverState });
+const app = createApp({ panelService, userRepo, zoneRepo, sensorRepo, lockoutService, eventRepo, alarmEvents, sirenRepo, guestSchedules, modeSchedules, haLinkRepo, driver, keypadService, keypadSettings, lockService, driverState: getDriverState });
 const httpServer = createServer(app);
 
 // Shares the REST API's HTTP server/port, per contracts/websocket-events.md's
@@ -135,14 +137,15 @@ const wss = createWebSocketServer(
     path: '/api/v1/stream',
     verifyClient: createWsVerifyClient({ haLinkLookup: haLinkRepo, sessionMiddleware }),
   },
-  () => buildLiveSnapshot({ panelService, zoneRepo, keypadService, keypadSettings, lockService, driverStatus, alarmEvents, sirenRepo }),
+  () => buildLiveSnapshot({ panelService, zoneRepo, keypadService, keypadSettings, lockService, driverStatus, alarmEvents, sirenRepo, modeSchedules }),
 );
-attachWsBroadcaster(wss, { panelService, sensorMapper, eventRepo, zoneRepo, keypadService, keypadSettings, lockService, driverStatus, alarmEvents, sirenRepo });
+attachWsBroadcaster(wss, { panelService, sensorMapper, eventRepo, zoneRepo, keypadService, keypadSettings, lockService, driverStatus, alarmEvents, sirenRepo, modeSchedules });
 
 // After the siren and broadcaster are listening: re-schedules an exit/entry delay that was in
 // flight when the service last stopped (SC-006), which may itself commit a transition.
 alarmEvents.resume();
 panelService.resume();
+new ModeScheduleRunner(modeSchedules, panelService, eventRepo).start();
 
 httpServer.listen(config.httpPort, () => {
   logger.info('HTTP/WebSocket server listening', {

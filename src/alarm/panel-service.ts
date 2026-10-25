@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events';
 import { AlarmCommandDispatcher, type AlarmCommandRequest, type CommandSource } from './dispatcher.js';
 import { AlarmPanelRepository, type AlarmMode, type AlarmPanel, type AlarmPanelUpdate, type ArmedMode } from './panel-repository.js';
-import { EventRepository } from '../events/event-repository.js';
+import { EventRepository, type SecurityEventSource } from '../events/event-repository.js';
 import { createLogger } from '../config/logger.js';
 import type { SensorDevice, SensorRepository } from '../db/repositories/sensor-repository.js';
 import { soundsSiren, type AlarmEventService } from './alarm-event-service.js';
@@ -62,6 +62,10 @@ export interface PanelCommandOptions {
   bypass?: string[];
   /** For `arm`: bypass every faulted sensor without confirmation (internal callers that cannot prompt). */
   autoBypass?: boolean;
+  /** Display name recorded as the history actor, e.g. `Schedule: Night`. */
+  actor?: string;
+  /** Record the command's history events as the system's (used by mode schedules). */
+  systemEvent?: boolean;
 }
 
 export type SensorBreachInput = Pick<SensorDevice, 'id' | 'zoneId' | 'category'> &
@@ -93,6 +97,12 @@ interface CommandContext {
   autoBypass: boolean;
   /** Human-readable bypass list for the `armed` event, filled in when arming begins. */
   bypassNote: string | null;
+  /** The sensors bypassed for this arm session, recorded as `bypassed` history events once arming starts. */
+  bypassedSensors: { id: string; name: string; reason: FaultReason | null }[];
+  /** Display name for the history log, e.g. `Schedule: Night`; null derives it from the user or source. */
+  actor: string | null;
+  /** Record this command's events as caused by the system (a schedule) rather than a person. */
+  systemEvent: boolean;
 }
 
 type PanelCommand = 'arm_away' | 'arm_home' | 'disarm' | 'disarm_zone';
@@ -100,7 +110,10 @@ type PanelCommand = 'arm_away' | 'arm_home' | 'disarm' | 'disarm_zone';
 /** Why a transition happened, logged alongside the old/new mode (e.g. `{ cause: 'arm_command', source: 'native' }`). */
 type TransitionCause = { cause: string } & Record<string, unknown>;
 
-function eventSource(source: CommandContext['source']): 'user' | 'home_assistant' | 'system' {
+function eventSource(source: CommandContext['source'], systemEvent = false): 'user' | 'home_assistant' | 'system' {
+  if (systemEvent) {
+    return 'system';
+  }
   return source === 'home_assistant' ? 'home_assistant' : source === 'system' ? 'system' : 'user';
 }
 
@@ -288,11 +301,17 @@ export class PanelService extends EventEmitter {
   }
 
   /** Mutes the siren of every sounding alarm event; the alarm stays active. Throws when nothing is sounding. */
-  silence(): AlarmEvent[] {
+  silence(options: { source?: SecurityEventSource; sourceUserId?: string | null } = {}): AlarmEvent[] {
     const silenced = this.options.alarmEvents?.silence() ?? [];
     if (silenced.length === 0) {
       throw new PanelStateError('No siren is sounding.');
     }
+    this.eventRepo.record({
+      type: 'siren_silenced',
+      source: options.source ?? 'user',
+      sourceUserId: options.sourceUserId ?? null,
+      details: `Silenced ${silenced.map((event) => event.type).join(', ')}; the alarm stays active`,
+    });
     return silenced;
   }
 
@@ -371,6 +390,9 @@ export class PanelService extends EventEmitter {
         bypass: [],
         autoBypass: false,
         bypassNote: null,
+        bypassedSensors: [],
+        actor: null,
+        systemEvent: false,
       };
       this.clearPendingTimer();
       this.pendingTimer = setTimeout(() => this.completeArming(target, context), remainingMs);
@@ -405,6 +427,9 @@ export class PanelService extends EventEmitter {
       bypass: options.bypass ?? [],
       autoBypass: options.autoBypass ?? false,
       bypassNote: null,
+      bypassedSensors: [],
+      actor: options.actor ?? null,
+      systemEvent: options.systemEvent ?? false,
     });
     return this.dispatcher.dispatch<AlarmPanel>(request);
   }
@@ -420,6 +445,9 @@ export class PanelService extends EventEmitter {
       bypass: [],
       autoBypass: false,
       bypassNote: null,
+      bypassedSensors: [],
+      actor: null,
+      systemEvent: false,
     };
     this.commandContext.delete(request);
 
@@ -466,6 +494,18 @@ export class PanelService extends EventEmitter {
     );
 
     this.pendingTimer = setTimeout(() => this.completeArming(targetMode, context), exitDelayMs);
+    for (const sensor of context.bypassedSensors) {
+      this.eventRepo.record({
+        type: 'bypassed',
+        source: eventSource(context.source, context.systemEvent),
+        sourceUserId: context.sourceUserId,
+        actor: context.actor,
+        deviceId: sensor.id,
+        deviceName: sensor.name,
+        relatedSensorId: sensor.id,
+        details: `Bypassed for this arm session${sensor.reason ? ` (${sensor.reason})` : ''}; armed via ${context.armSource}`,
+      });
+    }
     return panel;
   }
 
@@ -479,7 +519,8 @@ export class PanelService extends EventEmitter {
     this.commitPanel({ mode: targetMode, pendingDelayEndsAt: null }, { cause: 'exit_delay_elapsed' });
     this.eventRepo.record({
       type: 'armed',
-      source: eventSource(context.source),
+      source: eventSource(context.source, context.systemEvent),
+      actor: context.actor,
       sourceUserId: context.sourceUserId,
       details: context.bypassNote,
     });
@@ -539,6 +580,11 @@ export class PanelService extends EventEmitter {
         const name = sensors.find((sensor) => sensor.id === id)?.name ?? id;
         return entry ? `${name} (${entry.reason})` : name;
       };
+      context.bypassedSensors = [...bypassed].map((id) => ({
+        id,
+        name: sensors.find((sensor) => sensor.id === id)?.name ?? id,
+        reason: faulted.find((candidate) => candidate.sensorId === id)?.reason ?? null,
+      }));
       context.bypassNote = `Armed via ${context.armSource}; bypassed ${[...bypassed].map(label).join(', ')}`;
       logger.info('arming with bypassed sensors', { armSource: context.armSource, bypassed: [...bypassed] });
     }
@@ -567,7 +613,8 @@ export class PanelService extends EventEmitter {
     );
     this.eventRepo.record({
       type: wasAlarm ? 'alarm_cleared' : 'disarmed',
-      source: eventSource(context.source),
+      source: eventSource(context.source, context.systemEvent),
+      actor: context.actor,
       sourceUserId: context.sourceUserId,
       // Only the alarm-clearing case needs "cleared, and by whom" (User Story 3's second
       // acceptance scenario); a plain disarm from an already-safe state doesn't.
@@ -610,7 +657,8 @@ export class PanelService extends EventEmitter {
       );
       this.eventRepo.record({
         type: 'alarm_cleared',
-        source: eventSource(context.source),
+        source: eventSource(context.source, context.systemEvent),
+      actor: context.actor,
         sourceUserId: context.sourceUserId,
         relatedZoneId: zoneId,
         details: `${label} alarm cleared${who}; the rest of the panel stays armed`,
@@ -620,7 +668,8 @@ export class PanelService extends EventEmitter {
 
     this.eventRepo.record({
       type: 'disarmed',
-      source: eventSource(context.source),
+      source: eventSource(context.source, context.systemEvent),
+      actor: context.actor,
       sourceUserId: context.sourceUserId,
       relatedZoneId: zoneId,
       details: `${label} disarmed${who}; the rest of the panel stays armed`,

@@ -8,6 +8,7 @@ import { EventRepository, type SecurityEvent } from '../events/event-repository.
 import type { DriverState } from '../zwave/driver.js';
 import type { AlarmEvent } from '../alarm/alarm-event-repository.js';
 import type { AlarmEventService } from '../alarm/alarm-event-service.js';
+import type { ModeSchedule, ModeScheduleRepository } from '../alarm/mode-schedule.js';
 import type { SirenDevice, SirenRepository } from '../alarm/siren-repository.js';
 import type { LockService, LockSummary } from '../locks/lock-service.js';
 import type { KeypadSettings, KeypadSettingsService } from '../keypads/keypad-settings.js';
@@ -24,6 +25,8 @@ export interface WsBroadcasterDeps {
   keypadSettings?: KeypadSettingsService;
   /** Optional: `alarm.event` messages and the snapshot's `alarmEvents` are only sent when supplied. */
   alarmEvents?: AlarmEventService;
+  /** Optional: `mode-schedule.changed` / `.removed` messages and the snapshot's `modeSchedules` are only sent when supplied. */
+  modeSchedules?: ModeScheduleRepository;
   /** Optional: `siren.changed` / `siren.removed` messages and the snapshot's `sirens` are only sent when supplied. */
   sirenRepo?: SirenRepository;
   /** Optional: `lock.changed` events and the snapshot's `locks` are only sent when supplied. */
@@ -43,7 +46,7 @@ export interface DriverStatusSource {
  * live state, for use as `src/api/ws.ts`'s `createWebSocketServer`
  * `buildSnapshot` argument.
  */
-export function buildLiveSnapshot(deps: Pick<WsBroadcasterDeps, 'panelService' | 'zoneRepo' | 'keypadService' | 'keypadSettings' | 'lockService' | 'driverStatus' | 'alarmEvents' | 'sirenRepo'>): Record<string, unknown> {
+export function buildLiveSnapshot(deps: Pick<WsBroadcasterDeps, 'panelService' | 'zoneRepo' | 'keypadService' | 'keypadSettings' | 'lockService' | 'driverStatus' | 'alarmEvents' | 'sirenRepo' | 'modeSchedules'>): Record<string, unknown> {
   const panel = deps.panelService.getState();
   return {
     type: 'snapshot',
@@ -60,6 +63,7 @@ export function buildLiveSnapshot(deps: Pick<WsBroadcasterDeps, 'panelService' |
     zones: deps.zoneRepo.list(),
     ...(deps.alarmEvents && { alarmEvents: deps.alarmEvents.listActive() }),
     ...(deps.sirenRepo && { sirens: deps.sirenRepo.list() }),
+    ...(deps.modeSchedules && { modeSchedules: deps.modeSchedules.list() }),
     ...(deps.keypadService && { keypads: deps.keypadService.list() }),
     ...(deps.keypadSettings && { keypadSettings: deps.keypadSettings.get() }),
     ...(deps.lockService && { locks: deps.lockService.list() }),
@@ -113,6 +117,13 @@ export function attachWsBroadcaster(wss: WebSocketServer, deps: WsBroadcasterDep
       modes: deps.panelService.getModes(),
       triggeredBy: resolveTriggeredBy(deps.eventRepo, panel.triggeredBy),
     });
+  });
+
+  deps.modeSchedules?.on('mode_schedule_changed', (schedule: ModeSchedule) => {
+    broadcast(wss, { type: 'mode-schedule.changed', schedule });
+  });
+  deps.modeSchedules?.on('mode_schedule_removed', (id: string) => {
+    broadcast(wss, { type: 'mode-schedule.removed', id });
   });
 
   deps.sirenRepo?.on('siren_changed', (siren: SirenDevice) => {
@@ -177,7 +188,15 @@ export function attachWsBroadcaster(wss: WebSocketServer, deps: WsBroadcasterDep
       type: 'event.recorded',
       // `details` carries e.g. "Cleared by <name>"/"Cleared by Home Assistant" on `alarm_cleared`
       // events (User Story 3: recipients must be told the alarm was cleared, and by whom).
-      event: { id: event.id, type: event.type, occurredAt: event.occurredAt, details: event.details },
+      event: {
+        id: event.id,
+        type: event.type,
+        occurredAt: event.occurredAt,
+        details: event.details,
+        actor: event.actor,
+        deviceId: event.deviceId,
+        deviceName: event.deviceName,
+      },
     });
   });
 }

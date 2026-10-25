@@ -53,18 +53,19 @@ function build() {
 }
 
 describe('tamper handling', () => {
-  it('marks the sensor tampered (not breached), records a device_fault and emits sensor_fault; clears on idle', () => {
+  it('marks the sensor tampered (not breached), records a tamper event and emits sensor_fault; clears on idle', () => {
     const { sensorRepo, eventRepo, faults, tamperNotification, panelService } = build();
 
     tamperNotification(3);
 
     expect(sensorRepo.findByNodeId(10)).toMatchObject({ tampered: true, currentState: 'normal' });
-    expect(eventRepo.list().some((event) => event.type === 'device_fault' && event.details === 'tamper')).toBe(true);
+    expect(eventRepo.list().some((event) => event.type === 'tamper' && event.deviceName === 'Back door')).toBe(true);
     expect(faults).toHaveLength(1);
     expect(panelService.getState().mode).toBe('disarmed');
 
     tamperNotification(0);
     expect(sensorRepo.findByNodeId(10)?.tampered).toBe(false);
+    expect(eventRepo.list()[0]).toMatchObject({ type: 'tamper_cleared', actor: 'System' });
   });
 
   it('reads the Cover status value as tamper as well, and clears when the cover is back', () => {
