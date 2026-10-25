@@ -124,7 +124,15 @@ describe('ws-broadcaster', () => {
 
     const snapshot = await nextMessage(0);
     expect(snapshot.type).toBe('snapshot');
-    expect(snapshot.panel).toEqual({ mode: 'disarmed', pendingDelayEndsAt: null, disarmedZoneIds: [] });
+    expect(snapshot.panel).toEqual({
+      mode: 'disarmed',
+      armedMode: null,
+      pendingDelayEndsAt: null,
+      exitEndsAt: null,
+      entryEndsAt: null,
+      disarmedZoneIds: [],
+      bypassedDeviceIds: [],
+    });
     expect((snapshot.zones as unknown[]).length).toBe(1);
   });
 

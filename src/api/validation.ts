@@ -15,7 +15,17 @@ const name = z.string().min(1, 'must not be empty').max(MAX_NAME_LENGTH);
 export const codeBodySchema = z.object({ code });
 
 /** `POST /api/v1/panel/arm` body. */
-export const armBodySchema = z.object({ mode: z.enum(['armed_away', 'armed_home']) });
+export const ARM_SOURCES = ['app', 'keypad', 'lock', 'schedule', 'alexa'] as const;
+
+/**
+ * `POST /api/v1/panel/arm` body. `bypass` lists the sensor ids the caller confirms to bypass for this arm
+ * session; `source` defaults to `app`. `lock` and `schedule` bypass faulted sensors without confirmation.
+ */
+export const armBodySchema = z.object({
+  mode: z.enum(['armed_away', 'armed_home']),
+  bypass: z.array(z.string().min(1)).max(256).optional(),
+  source: z.enum(ARM_SOURCES).optional(),
+});
 
 const description = z.string().max(500);
 const nonEmpty = (body: object): boolean => Object.keys(body).length > 0;

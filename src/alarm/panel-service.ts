@@ -3,7 +3,7 @@ import { AlarmCommandDispatcher, type AlarmCommandRequest, type CommandSource } 
 import { AlarmPanelRepository, type AlarmMode, type AlarmPanel, type AlarmPanelUpdate, type ArmedMode } from './panel-repository.js';
 import { EventRepository } from '../events/event-repository.js';
 import { createLogger } from '../config/logger.js';
-import type { SensorDevice } from '../db/repositories/sensor-repository.js';
+import type { SensorDevice, SensorRepository } from '../db/repositories/sensor-repository.js';
 import type { ModeConfig, ModeConfigRepository, ModeDelays } from '../db/repositories/mode-config-repository.js';
 
 const logger = createLogger('alarm/panel');
@@ -12,6 +12,34 @@ export type ArmMode = ArmedMode;
 
 /** Thrown when a command is requested from a panel mode that doesn't support it (e.g. arming while already armed). */
 export class PanelStateError extends Error {}
+
+/** Where an arm request came from (Ring spec, Arming). `lock` and `schedule` bypass faulted sensors automatically. */
+export type ArmSource = 'app' | 'keypad' | 'lock' | 'schedule' | 'alexa';
+const AUTO_BYPASS_SOURCES: ReadonlySet<ArmSource> = new Set(['lock', 'schedule']);
+
+/** Why a sensor blocks arming. `tampered`, `not_set_up` and `updating` are reserved: the server does not track them yet. */
+export type FaultReason = 'open' | 'tampered' | 'offline' | 'not_set_up' | 'updating';
+
+export interface FaultedSensor {
+  sensorId: string;
+  name: string;
+  zoneId: string;
+  reason: FaultReason;
+}
+
+/** Thrown by arm() when sensors are faulted and the request neither auto-bypasses nor lists them in `bypass`. */
+export class NeedsBypassError extends Error {
+  constructor(readonly faulted: FaultedSensor[]) {
+    super(`${String(faulted.length)} sensor(s) are open or offline; confirm a bypass to arm.`);
+  }
+}
+
+/** Thrown by arm() when `bypass` names a sensor that does not exist or is not an intrusion sensor. */
+export class UnknownBypassSensorError extends Error {
+  constructor(readonly sensorIds: string[]) {
+    super(`Cannot bypass unknown or non-intrusion sensor(s): ${sensorIds.join(', ')}.`);
+  }
+}
 
 export interface PanelCommandOptions {
   source: CommandSource;
@@ -26,6 +54,12 @@ export interface PanelCommandOptions {
   clearedBy?: string | null;
   /** For `disarmZone`: a display name for the zone, recorded in the SecurityEvent details. */
   zoneName?: string | null;
+  /** For `arm`: where the request came from. Defaults to `app`. */
+  armSource?: ArmSource;
+  /** For `arm`: sensor ids the caller confirms to bypass for this arm session. */
+  bypass?: string[];
+  /** For `arm`: bypass every faulted sensor without confirmation (internal callers that cannot prompt). */
+  autoBypass?: boolean;
 }
 
 export type SensorBreachInput = Pick<SensorDevice, 'id' | 'zoneId' | 'category'> &
@@ -47,6 +81,11 @@ interface CommandContext {
   source: CommandSource | 'system';
   sourceUserId: string | null;
   clearedBy: string | null;
+  armSource: ArmSource;
+  bypass: string[];
+  autoBypass: boolean;
+  /** Human-readable bypass list for the `armed` event, filled in when arming begins. */
+  bypassNote: string | null;
 }
 
 type PanelCommand = 'arm_away' | 'arm_home' | 'disarm' | 'disarm_zone';
@@ -94,6 +133,8 @@ export class PanelService extends EventEmitter {
      */
     private readonly options: {
       modeConfig?: ModeConfigRepository;
+      /** Enables the pre-arm check; without it every arm request succeeds with no bypass. */
+      sensorRepo?: SensorRepository;
       exitDelayMs?: number;
       entryDelayMs?: number;
       dispatcherWindowMs?: number;
@@ -213,13 +254,23 @@ export class PanelService extends EventEmitter {
         logger.warn('arming interrupted by a restart with no recorded target mode; falling back to disarmed');
         this.panelRepo.clearDisarmedZones();
         this.commitPanel(
-          { mode: 'disarmed', pendingDelayEndsAt: null, triggeredBy: null, armedMode: null },
+          { mode: 'disarmed', pendingDelayEndsAt: null, triggeredBy: null, armedMode: null, bypassedDeviceIds: [] },
           { cause: 'restart_recovery' },
         );
         return;
       }
       const target = panel.armedMode;
-      const context: CommandContext = { zoneId: null, zoneName: null, source: 'system', sourceUserId: null, clearedBy: null };
+      const context: CommandContext = {
+        zoneId: null,
+        zoneName: null,
+        source: 'system',
+        sourceUserId: null,
+        clearedBy: null,
+        armSource: 'app',
+        bypass: [],
+        autoBypass: false,
+        bypassNote: null,
+      };
       this.clearPendingTimer();
       this.pendingTimer = setTimeout(() => this.completeArming(target, context), remainingMs);
     } else if (panel.mode === 'alarm_pending') {
@@ -249,6 +300,10 @@ export class PanelService extends EventEmitter {
       source: options.source,
       sourceUserId: options.sourceUserId ?? null,
       clearedBy: options.clearedBy ?? null,
+      armSource: options.armSource ?? 'app',
+      bypass: options.bypass ?? [],
+      autoBypass: options.autoBypass ?? false,
+      bypassNote: null,
     });
     return this.dispatcher.dispatch<AlarmPanel>(request);
   }
@@ -260,6 +315,10 @@ export class PanelService extends EventEmitter {
       source: request.source,
       sourceUserId: null,
       clearedBy: null,
+      armSource: 'app' as ArmSource,
+      bypass: [],
+      autoBypass: false,
+      bypassNote: null,
     };
     this.commandContext.delete(request);
 
@@ -283,6 +342,7 @@ export class PanelService extends EventEmitter {
       throw new PanelStateError(`Cannot arm while panel is in mode "${current.mode}"; it must be disarmed first.`);
     }
 
+    const bypassedDeviceIds = this.preArmCheck(targetMode, context);
     this.clearPendingTimer();
     this.panelRepo.clearDisarmedZones(); // a fresh arming covers every zone again
     const exitDelayMs = this.delaysFor(targetMode).exitDelaySec * 1000;
@@ -292,8 +352,16 @@ export class PanelService extends EventEmitter {
         pendingDelayEndsAt: Date.now() + exitDelayMs,
         triggeredBy: null,
         armedMode: targetMode,
+        bypassedDeviceIds,
       },
-      { cause: 'arm_command', targetMode, source: context.source, sourceUserId: context.sourceUserId },
+      {
+        cause: 'arm_command',
+        targetMode,
+        source: context.source,
+        armSource: context.armSource,
+        sourceUserId: context.sourceUserId,
+        bypassedDeviceIds,
+      },
     );
 
     this.pendingTimer = setTimeout(() => this.completeArming(targetMode, context), exitDelayMs);
@@ -312,7 +380,63 @@ export class PanelService extends EventEmitter {
       type: 'armed',
       source: eventSource(context.source),
       sourceUserId: context.sourceUserId,
+      details: context.bypassNote,
     });
+  }
+
+  /**
+   * The pre-arm check (Ring spec, Arming): the intrusion sensors armed for `targetMode` that are open or
+   * offline are faulted. A `lock`/`schedule` source (or `autoBypass`) bypasses them all; any other source must
+   * list every one in `bypass`, otherwise arming is refused with NeedsBypassError and nothing changes. Arming
+   * succeeds even if every sensor ends up bypassed. Returns the sensor ids bypassed for this arm session.
+   */
+  private preArmCheck(targetMode: ArmMode, context: CommandContext): string[] {
+    const sensorRepo = this.options.sensorRepo;
+    if (!sensorRepo) {
+      return [];
+    }
+    const sensors = sensorRepo.list();
+
+    const unknown = context.bypass.filter(
+      (id) => !sensors.some((sensor) => sensor.id === id && sensor.category === 'intrusion'),
+    );
+    if (unknown.length > 0) {
+      throw new UnknownBypassSensorError(unknown);
+    }
+
+    const faulted: FaultedSensor[] = [];
+    for (const sensor of sensors) {
+      const armedForMode = targetMode === 'armed_home' ? sensor.armedHome : sensor.armedAway;
+      if (sensor.category !== 'intrusion' || sensor.alertsOnly || !armedForMode) {
+        continue;
+      }
+      const reason: FaultReason | null =
+        sensor.connectivityStatus === 'offline' ? 'offline' : sensor.currentState === 'breached' ? 'open' : null;
+      if (reason !== null) {
+        faulted.push({ sensorId: sensor.id, name: sensor.name, zoneId: sensor.zoneId, reason });
+      }
+    }
+
+    const autoBypass = context.autoBypass || AUTO_BYPASS_SOURCES.has(context.armSource);
+    const confirmed = new Set(context.bypass);
+    if (!autoBypass && faulted.some((entry) => !confirmed.has(entry.sensorId))) {
+      throw new NeedsBypassError(faulted);
+    }
+
+    const bypassed = new Set(context.bypass);
+    if (autoBypass) {
+      faulted.forEach((entry) => bypassed.add(entry.sensorId));
+    }
+    if (bypassed.size > 0) {
+      const label = (id: string): string => {
+        const entry = faulted.find((candidate) => candidate.sensorId === id);
+        const name = sensors.find((sensor) => sensor.id === id)?.name ?? id;
+        return entry ? `${name} (${entry.reason})` : name;
+      };
+      context.bypassNote = `Armed via ${context.armSource}; bypassed ${[...bypassed].map(label).join(', ')}`;
+      logger.info('arming with bypassed sensors', { armSource: context.armSource, bypassed: [...bypassed] });
+    }
+    return [...bypassed];
   }
 
   private applyDisarm(context: CommandContext): AlarmPanel {
@@ -325,7 +449,7 @@ export class PanelService extends EventEmitter {
     this.panelRepo.clearDisarmedZones();
     const wasAlarm = current.mode === 'alarm_pending' || current.mode === 'alarm_triggered';
     const panel = this.commitPanel(
-      { mode: 'disarmed', pendingDelayEndsAt: null, triggeredBy: null, armedMode: null },
+      { mode: 'disarmed', pendingDelayEndsAt: null, triggeredBy: null, armedMode: null, bypassedDeviceIds: [] },
       {
         cause: wasAlarm ? 'alarm_cleared' : 'disarm_command',
         source: context.source,
@@ -371,7 +495,7 @@ export class PanelService extends EventEmitter {
         this.panelRepo.clearDisarmedZones();
       }
       const panel = this.commitPanel(
-        { mode: next, pendingDelayEndsAt: null, triggeredBy: null },
+        { mode: next, pendingDelayEndsAt: null, triggeredBy: null, ...(next === 'disarmed' && { bypassedDeviceIds: [] }) },
         { cause: 'zone_alarm_cleared', zoneId, source: context.source, sourceUserId: context.sourceUserId },
       );
       this.eventRepo.record({
@@ -415,6 +539,11 @@ export class PanelService extends EventEmitter {
         sensorId: sensor.id,
         zoneId: sensor.zoneId,
       });
+      return current;
+    }
+
+    if (current.bypassedDeviceIds.includes(sensor.id)) {
+      logger.info('intrusion breach ignored: the sensor is bypassed for this arm session', { sensorId: sensor.id });
       return current;
     }
 

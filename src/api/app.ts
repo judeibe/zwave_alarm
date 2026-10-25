@@ -38,11 +38,14 @@ import type { LockService } from '../locks/lock-service.js';
 export class ApiError extends Error {
   readonly status: number;
   readonly code: string;
+  /** Extra fields merged into the response's `error` object (e.g. `faulted` on a 409 `needs_bypass`). */
+  readonly details: Record<string, unknown>;
 
-  constructor(status: number, code: string, message: string) {
+  constructor(status: number, code: string, message: string, details: Record<string, unknown> = {}) {
     super(message);
     this.status = status;
     this.code = code;
+    this.details = details;
   }
 }
 
@@ -57,6 +60,7 @@ interface ErrorResponseBody {
   status: number;
   code: string;
   message: string;
+  details: Record<string, unknown>;
 }
 
 /**
@@ -68,7 +72,7 @@ interface ErrorResponseBody {
  */
 export function toErrorResponse(err: unknown): ErrorResponseBody {
   if (err instanceof ApiError) {
-    return { status: err.status, code: err.code, message: err.message };
+    return { status: err.status, code: err.code, message: err.message, details: err.details };
   }
 
   // express.json()'s body-parser throws plain errors with a numeric
@@ -76,7 +80,7 @@ export function toErrorResponse(err: unknown): ErrorResponseBody {
   if (err instanceof Error && 'status' in err) {
     const status = (err as { status: unknown }).status;
     if (typeof status === 'number') {
-      return { status, code: 'bad_request', message: err.message };
+      return { status, code: 'bad_request', message: err.message, details: {} };
     }
   }
 
@@ -84,6 +88,7 @@ export function toErrorResponse(err: unknown): ErrorResponseBody {
     status: 500,
     code: 'internal_error',
     message: err instanceof Error ? err.message : 'Internal server error',
+    details: {},
   };
 }
 
@@ -186,8 +191,8 @@ export function createApp(deps?: AppDeps): Express {
 
   // eslint-disable-next-line @typescript-eslint/no-unused-vars -- Express only recognizes error middleware with all four parameters present.
   app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
-    const { status, code, message } = toErrorResponse(err);
-    res.status(status).json({ error: { code, message } });
+    const { status, code, message, details } = toErrorResponse(err);
+    res.status(status).json({ error: { code, message, ...details } });
   });
 
   return app;

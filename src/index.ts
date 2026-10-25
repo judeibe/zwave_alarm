@@ -52,7 +52,7 @@ const haLinkRepo = new HaLinkRepository(db);
 const modeConfigRepo = new ModeConfigRepository(db);
 // The env vars only seed the first run; afterwards the delays live in the database (GET/PATCH /api/v1/modes).
 modeConfigRepo.ensureSeeded({ exitDelaySec: config.exitDelaySeconds, entryDelaySec: config.entryDelaySeconds });
-const panelService = new PanelService(panelRepo, eventRepo, { modeConfig: modeConfigRepo });
+const panelService = new PanelService(panelRepo, eventRepo, { modeConfig: modeConfigRepo, sensorRepo });
 const lockoutService = new LockoutService(userRepo, lockoutPolicyRepo, eventRepo, panelService);
 
 const driver = getDriver();

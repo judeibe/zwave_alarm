@@ -168,6 +168,13 @@ const MIGRATIONS: Migration[] = [
       );
     `,
   },
+  {
+    // The arm session's bypassed sensors (Ring spec, Arming): set when arming starts, cleared on disarm.
+    id: '008_panel_bypassed_devices',
+    sql: `
+      ALTER TABLE alarm_panel ADD COLUMN bypassed_device_ids TEXT NOT NULL DEFAULT '[]';
+    `,
+  },
 ];
 
 function ensureMigrationsTable(db: Database.Database): void {

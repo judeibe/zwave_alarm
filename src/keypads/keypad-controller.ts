@@ -93,7 +93,14 @@ export class KeypadController {
       }
     }
     try {
-      await this.panelService.arm(mode, { source: 'native', sourceUserId: user?.id ?? null });
+      // The keypad's confirm-bypass prompt (the Gen1 check key) is not built yet, so until then a keypad arm
+      // bypasses faulted sensors rather than leaving the keypad unable to arm with a door open.
+      await this.panelService.arm(mode, {
+        source: 'native',
+        sourceUserId: user?.id ?? null,
+        armSource: 'keypad',
+        autoBypass: true,
+      });
     } catch (err) {
       if (!this.isExpectedRefusal(err)) throw err;
       logger.info('keypad arm request refused', { nodeId, reason: err.message });
