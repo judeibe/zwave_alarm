@@ -1,6 +1,6 @@
 {
   "name": "zwave-alarm-ha-integration",
-  "version": "3.6.0",
+  "version": "3.7.0",
   "description": "Self-hosted Z-Wave alarm system with Home Assistant integration",
   "main": "dist/index.js",
   "type": "module",
