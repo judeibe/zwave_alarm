@@ -3,6 +3,7 @@ import { fileURLToPath } from 'node:url';
 import express, { type Express, type NextFunction, type Request, type Response } from 'express';
 import type { Driver } from 'zwave-js';
 import { sessionMiddleware } from '../auth/session.js';
+import { verifySameOrigin } from '../auth/csrf.js';
 import type { LockoutService } from '../auth/lockout-service.js';
 import type { UserRepository } from '../auth/user-repository.js';
 import type { ZoneRepository } from '../db/repositories/zone-repository.js';
@@ -156,6 +157,7 @@ export function createApp(deps?: AppDeps): Express {
     configureAuthRequired(config.apiAuthRequired);
 
     app.use(sessionMiddleware);
+    app.use('/api', verifySameOrigin);
     const routeDeps = {
       panelService: deps.panelService,
       userRepo: deps.userRepo,
