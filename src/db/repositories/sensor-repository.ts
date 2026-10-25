@@ -10,6 +10,9 @@ export const SENSOR_PLACEMENTS = ['MAIN_DOOR', 'SECONDARY_DOOR', 'WINDOW', 'ENTR
 /** Where an intrusion sensor sits (Ring spec, Triggers): MAIN_DOOR and ENTRYWAY get the entry delay, the rest alarm at once. */
 export type SensorPlacement = (typeof SENSOR_PLACEMENTS)[number];
 
+/** What a life-safety sensor raises when it trips. Intrusion sensors have none (they raise BURGLARY). */
+export type SensorAlarmKind = 'SMOKE' | 'CO' | 'FLOOD_FREEZE';
+
 export interface SensorArmed {
   armedHome: boolean;
   armedAway: boolean;
@@ -43,6 +46,8 @@ export interface SensorDevice {
   armedAway: boolean;
   /** Notify only; never raises an alarm (the spec's Outdoor Contact Sensor "alerts only" setting). */
   alertsOnly: boolean;
+  /** Set for life-safety sensors (default SMOKE), null for intrusion sensors. */
+  alarmKind: SensorAlarmKind | null;
   updatedAt: number;
 }
 
@@ -55,6 +60,7 @@ export interface CreateSensorInput {
   armedHome?: boolean;
   armedAway?: boolean;
   alertsOnly?: boolean;
+  alarmKind?: SensorAlarmKind | null;
 }
 
 /** Fault fields (connectivity/battery) and breach state are reported separately (FR-012) but both update through this. */
@@ -75,6 +81,7 @@ interface SensorDeviceRow {
   armed_home: number;
   armed_away: number;
   alerts_only: number;
+  alarm_kind: SensorAlarmKind | null;
   updated_at: number;
 }
 
@@ -92,6 +99,7 @@ function toDomain(row: SensorDeviceRow): SensorDevice {
     armedHome: row.armed_home === 1,
     armedAway: row.armed_away === 1,
     alertsOnly: row.alerts_only === 1,
+    alarmKind: row.alarm_kind,
     updatedAt: row.updated_at,
   };
 }
@@ -133,13 +141,14 @@ export class SensorRepository extends Repository {
       armedHome: input.armedHome ?? armed.armedHome,
       armedAway: input.armedAway ?? armed.armedAway,
       alertsOnly: input.alertsOnly ?? false,
+      alarmKind: input.category === 'life-safety' ? (input.alarmKind ?? 'SMOKE') : null,
       updatedAt: Date.now(),
     };
     this.run(
       `INSERT INTO sensor_devices
          (id, zwave_node_id, zone_id, name, category, current_state, battery_level, connectivity_status,
-          placement, armed_home, armed_away, alerts_only, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          placement, armed_home, armed_away, alerts_only, alarm_kind, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       sensor.id,
       sensor.zwaveNodeId,
       sensor.zoneId,
@@ -152,6 +161,7 @@ export class SensorRepository extends Repository {
       sensor.armedHome ? 1 : 0,
       sensor.armedAway ? 1 : 0,
       sensor.alertsOnly ? 1 : 0,
+      sensor.alarmKind,
       sensor.updatedAt,
     );
     return sensor;
@@ -190,7 +200,7 @@ export class SensorRepository extends Repository {
    */
   updateConfig(
     id: string,
-    changes: Partial<Pick<SensorDevice, 'name' | 'category' | 'zoneId' | 'placement' | 'armedHome' | 'armedAway' | 'alertsOnly'>>,
+    changes: Partial<Pick<SensorDevice, 'name' | 'category' | 'zoneId' | 'placement' | 'armedHome' | 'armedAway' | 'alertsOnly' | 'alarmKind'>>,
   ): SensorDevice {
     const current = this.findById(id);
     if (!current) {
@@ -200,15 +210,17 @@ export class SensorRepository extends Repository {
     if (next.category === 'life-safety') {
       next.placement = null;
       next.alertsOnly = false;
-    } else if (next.placement === null) {
-      next.placement = defaultPlacement('intrusion');
+      next.alarmKind ??= 'SMOKE';
+    } else {
+      next.alarmKind = null;
+      next.placement ??= defaultPlacement('intrusion');
     }
     if (next.placement !== current.placement && changes.armedHome === undefined && changes.armedAway === undefined) {
       Object.assign(next, defaultArmed(next.placement));
     }
     this.run(
       `UPDATE sensor_devices
-       SET name = ?, category = ?, zone_id = ?, placement = ?, armed_home = ?, armed_away = ?, alerts_only = ?, updated_at = ?
+       SET name = ?, category = ?, zone_id = ?, placement = ?, armed_home = ?, armed_away = ?, alerts_only = ?, alarm_kind = ?, updated_at = ?
        WHERE id = ?`,
       next.name,
       next.category,
@@ -217,6 +229,7 @@ export class SensorRepository extends Repository {
       next.armedHome ? 1 : 0,
       next.armedAway ? 1 : 0,
       next.alertsOnly ? 1 : 0,
+      next.alarmKind,
       next.updatedAt,
       id,
     );

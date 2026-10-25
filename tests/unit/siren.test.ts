@@ -9,6 +9,8 @@ import { ZoneRepository } from '../../src/db/repositories/zone-repository.js';
 import { SensorRepository } from '../../src/db/repositories/sensor-repository.js';
 import { PanelService } from '../../src/alarm/panel-service.js';
 import { Siren } from '../../src/alarm/siren.js';
+import { AlarmEventRepository } from '../../src/alarm/alarm-event-repository.js';
+import { AlarmEventService } from '../../src/alarm/alarm-event-service.js';
 
 const EXIT_DELAY_MS = 1_000;
 const ENTRY_DELAY_MS = 1_000;
@@ -161,5 +163,59 @@ describe('Siren', () => {
     expect(warnEntry).toBeUndefined();
 
     logSpy.mockRestore();
+  });
+});
+
+describe('Siren following alarm events', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function build() {
+    const db = createDatabase(':memory:');
+    const alarmEvents = new AlarmEventService(new AlarmEventRepository(db));
+    const panelService = new PanelService(new AlarmPanelRepository(db), new EventRepository(db), { alarmEvents });
+    const driver = new MockDriver();
+    const sirenNode = new MockNode();
+    driver.controller.nodes.add(5, sirenNode);
+    new Siren(driver as unknown as Driver, panelService, { nodeId: 5, alarmEvents });
+    return { panelService, alarmEvents, sirenNode };
+  }
+
+  const target = { commandClass: CommandClasses['Binary Switch'], property: 'targetValue' };
+
+  it('turns the siren off when it is silenced, and the event stays open', () => {
+    const { panelService, alarmEvents, sirenNode } = build();
+    panelService.raiseEmergency('PANIC');
+    expect(sirenNode.setValue).toHaveBeenLastCalledWith(target, true);
+
+    panelService.silence();
+
+    expect(sirenNode.setValue).toHaveBeenLastCalledWith(target, false);
+    expect(alarmEvents.listActive()).toHaveLength(1);
+  });
+
+  it('stops by itself after 600 s and marks the event timed out, but keeps it open', async () => {
+    const { panelService, alarmEvents, sirenNode } = build();
+    panelService.raiseEmergency('PANIC');
+
+    await vi.advanceTimersByTimeAsync(599_000);
+    expect(sirenNode.setValue).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(sirenNode.setValue).toHaveBeenLastCalledWith(target, false);
+    expect(alarmEvents.listActive()[0]).toMatchObject({ sirenState: 'timed_out', endedAt: null });
+  });
+
+  it('does not sound for a medical emergency', () => {
+    const { panelService, sirenNode } = build();
+
+    panelService.raiseEmergency('MEDICAL');
+
+    expect(sirenNode.setValue).not.toHaveBeenCalled();
   });
 });

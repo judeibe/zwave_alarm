@@ -4,6 +4,8 @@ import { AlarmPanelRepository, type AlarmMode, type AlarmPanel, type AlarmPanelU
 import { EventRepository } from '../events/event-repository.js';
 import { createLogger } from '../config/logger.js';
 import type { SensorDevice, SensorRepository } from '../db/repositories/sensor-repository.js';
+import { soundsSiren, type AlarmEventService } from './alarm-event-service.js';
+import type { AlarmEvent, AlarmEventType, EmergencyService } from './alarm-event-repository.js';
 import type { ModeConfig, ModeConfigRepository, ModeDelays } from '../db/repositories/mode-config-repository.js';
 
 const logger = createLogger('alarm/panel');
@@ -63,13 +65,18 @@ export interface PanelCommandOptions {
 }
 
 export type SensorBreachInput = Pick<SensorDevice, 'id' | 'zoneId' | 'category'> &
-  Partial<Pick<SensorDevice, 'placement' | 'armedHome' | 'armedAway' | 'alertsOnly'>>;
+  Partial<Pick<SensorDevice, 'placement' | 'armedHome' | 'armedAway' | 'alertsOnly' | 'alarmKind'>>;
 
 export interface TriggerAlarmContext {
   relatedZoneId?: string | null;
   relatedSensorId?: string | null;
   details?: string | null;
+  /** What kind of alarm event this opens. Defaults to BURGLARY. */
+  alarm?: { type: AlarmEventType; service?: EmergencyService | null };
 }
+
+/** The app's emergency buttons (and the keypad's), mapped onto alarm event types by `raiseEmergency`. */
+export type EmergencyKind = 'PANIC' | 'FIRE' | 'MEDICAL' | 'SOS';
 
 const DEFAULT_DELAY_MS = 60_000;
 
@@ -133,6 +140,8 @@ export class PanelService extends EventEmitter {
      */
     private readonly options: {
       modeConfig?: ModeConfigRepository;
+      /** Records alarm events and drives the siren's lifecycle; without it alarms still change the panel only. */
+      alarmEvents?: AlarmEventService;
       /** Enables the pre-arm check; without it every arm request succeeds with no bypass. */
       sensorRepo?: SensorRepository;
       exitDelayMs?: number;
@@ -201,7 +210,11 @@ export class PanelService extends EventEmitter {
   /** Intrusion sensors are armed-state-gated (FR-003); life-safety sensors always trigger immediately (FR-015). */
   reportSensorBreach(sensor: SensorBreachInput): AlarmPanel {
     if (sensor.category === 'life-safety') {
-      return this.triggerAlarm({ relatedZoneId: sensor.zoneId, relatedSensorId: sensor.id });
+      return this.triggerAlarm({
+        relatedZoneId: sensor.zoneId,
+        relatedSensorId: sensor.id,
+        alarm: { type: sensor.alarmKind ?? 'SMOKE' },
+      });
     }
     return this.reportIntrusionBreach(sensor);
   }
@@ -212,23 +225,73 @@ export class PanelService extends EventEmitter {
    * lockout-policy's `trigger_alarm` mode (FR-016).
    */
   triggerAlarm(context: TriggerAlarmContext = {}): AlarmPanel {
-    this.clearPendingTimer();
-    const event = this.eventRepo.record({
+    return this.raise(context).panel;
+  }
+
+  /**
+   * Opens an alarm event for an emergency button (Ring spec, Events). PANIC is a police request, FIRE a fire
+   * request (siren), MEDICAL a medical request (no siren), SOS the app's button with a chosen `service`
+   * (default police). Always allowed, in every mode.
+   */
+  raiseEmergency(kind: EmergencyKind, options: { service?: EmergencyService | null; details?: string | null } = {}): AlarmEvent {
+    const alarm: NonNullable<TriggerAlarmContext['alarm']> =
+      kind === 'PANIC'
+        ? { type: 'PANIC', service: 'police' }
+        : kind === 'FIRE'
+          ? { type: 'FIRE_MEDICAL', service: 'fire' }
+          : kind === 'MEDICAL'
+            ? { type: 'FIRE_MEDICAL', service: 'medical' }
+            : { type: 'SOS', service: options.service ?? 'police' };
+    const { event } = this.raise({ alarm, details: options.details ?? `${kind} requested` });
+    if (!event) {
+      throw new PanelStateError('Alarm events are not available.');
+    }
+    return event;
+  }
+
+  /** Mutes the siren of every sounding alarm event; the alarm stays active. Throws when nothing is sounding. */
+  silence(): AlarmEvent[] {
+    const silenced = this.options.alarmEvents?.silence() ?? [];
+    if (silenced.length === 0) {
+      throw new PanelStateError('No siren is sounding.');
+    }
+    return silenced;
+  }
+
+  private raise(context: TriggerAlarmContext): { panel: AlarmPanel; event: AlarmEvent | null } {
+    const type = context.alarm?.type ?? 'BURGLARY';
+    const service = context.alarm?.service ?? null;
+    const securityEvent = this.eventRepo.record({
       type: 'alarm_triggered',
       source: 'system',
       relatedZoneId: context.relatedZoneId ?? null,
       relatedSensorId: context.relatedSensorId ?? null,
       details: context.details ?? null,
     });
-    return this.commitPanel(
-      { mode: 'alarm_triggered', pendingDelayEndsAt: null, triggeredBy: event.id },
+    const event =
+      this.options.alarmEvents?.open({
+        type,
+        service,
+        triggerDeviceId: context.relatedSensorId ?? null,
+        details: context.details ?? null,
+      }) ?? null;
+
+    if (!soundsSiren(type, service)) {
+      // Medical, duress and flood/freeze are silent: they open an event but do not put the panel into alarm.
+      return { panel: this.panelRepo.getPanel(), event };
+    }
+    this.clearPendingTimer();
+    const panel = this.commitPanel(
+      { mode: 'alarm_triggered', pendingDelayEndsAt: null, triggeredBy: securityEvent.id },
       {
         cause: context.relatedSensorId ? 'sensor_alarm' : 'alarm_triggered',
+        alarmType: type,
         sensorId: context.relatedSensorId ?? null,
         zoneId: context.relatedZoneId ?? null,
         details: context.details ?? null,
       },
     );
+    return { panel, event };
   }
 
   /**
@@ -442,11 +505,14 @@ export class PanelService extends EventEmitter {
   private applyDisarm(context: CommandContext): AlarmPanel {
     const current = this.panelRepo.getPanel();
     if (current.mode === 'disarmed') {
-      return current; // Nothing to clear; not a state change worth logging.
+      // A silent event (medical, flood) can be open while disarmed; a disarm still closes it.
+      this.options.alarmEvents?.endAll();
+      return current; // Nothing else to clear; not a state change worth logging.
     }
 
     this.clearPendingTimer();
     this.panelRepo.clearDisarmedZones();
+    this.options.alarmEvents?.endAll();
     const wasAlarm = current.mode === 'alarm_pending' || current.mode === 'alarm_triggered';
     const panel = this.commitPanel(
       { mode: 'disarmed', pendingDelayEndsAt: null, triggeredBy: null, armedMode: null, bypassedDeviceIds: [] },
@@ -490,6 +556,7 @@ export class PanelService extends EventEmitter {
       // down. The panel goes back to the armed mode it was in (or disarmed, if a life-safety
       // sensor raised the alarm while the panel was disarmed).
       this.clearPendingTimer();
+      this.options.alarmEvents?.endBurglary();
       const next: AlarmMode = current.armedMode ?? 'disarmed';
       if (next === 'disarmed') {
         this.panelRepo.clearDisarmedZones();

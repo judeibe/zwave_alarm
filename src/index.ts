@@ -15,6 +15,8 @@ import { getDriver, getDriverState, onDriverStateChange, stopDriver } from './zw
 import { createShutdown } from './shutdown.js';
 import { AlarmPanelRepository } from './alarm/panel-repository.js';
 import { PanelService } from './alarm/panel-service.js';
+import { AlarmEventRepository } from './alarm/alarm-event-repository.js';
+import { AlarmEventService } from './alarm/alarm-event-service.js';
 import { Siren } from './alarm/siren.js';
 import { EventRepository } from './events/event-repository.js';
 import { ModeConfigRepository } from './db/repositories/mode-config-repository.js';
@@ -52,7 +54,8 @@ const haLinkRepo = new HaLinkRepository(db);
 const modeConfigRepo = new ModeConfigRepository(db);
 // The env vars only seed the first run; afterwards the delays live in the database (GET/PATCH /api/v1/modes).
 modeConfigRepo.ensureSeeded({ exitDelaySec: config.exitDelaySeconds, entryDelaySec: config.entryDelaySeconds });
-const panelService = new PanelService(panelRepo, eventRepo, { modeConfig: modeConfigRepo, sensorRepo });
+const alarmEvents = new AlarmEventService(new AlarmEventRepository(db));
+const panelService = new PanelService(panelRepo, eventRepo, { modeConfig: modeConfigRepo, sensorRepo, alarmEvents });
 const lockoutService = new LockoutService(userRepo, lockoutPolicyRepo, eventRepo, panelService);
 
 const driver = getDriver();
@@ -79,7 +82,7 @@ driver.on('driver ready', () => {
     });
   lockGateway.start();
 });
-const siren = new Siren(driver, panelService, { nodeId: config.sirenNodeId });
+const siren = new Siren(driver, panelService, { nodeId: config.sirenNodeId, alarmEvents });
 
 // Keypads (src/keypads): adapters are auto-discovered from this directory, so supporting a new
 // keypad means adding a file there, not editing this one.
@@ -110,7 +113,7 @@ new KeypadController(keypadService, panelService, userRepo, lockoutService, even
   requireCodeToArm: () => keypadSettings.get().requireCodeToArm,
 }).start();
 
-const app = createApp({ panelService, userRepo, zoneRepo, sensorRepo, lockoutService, eventRepo, haLinkRepo, driver, keypadService, keypadSettings, lockService, driverState: getDriverState });
+const app = createApp({ panelService, userRepo, zoneRepo, sensorRepo, lockoutService, eventRepo, alarmEvents, haLinkRepo, driver, keypadService, keypadSettings, lockService, driverState: getDriverState });
 const httpServer = createServer(app);
 
 // Shares the REST API's HTTP server/port, per contracts/websocket-events.md's
@@ -123,12 +126,13 @@ const wss = createWebSocketServer(
     path: '/api/v1/stream',
     verifyClient: createWsVerifyClient({ haLinkLookup: haLinkRepo, sessionMiddleware }),
   },
-  () => buildLiveSnapshot({ panelService, zoneRepo, keypadService, keypadSettings, lockService, driverStatus }),
+  () => buildLiveSnapshot({ panelService, zoneRepo, keypadService, keypadSettings, lockService, driverStatus, alarmEvents }),
 );
-attachWsBroadcaster(wss, { panelService, sensorMapper, eventRepo, zoneRepo, keypadService, keypadSettings, lockService, driverStatus });
+attachWsBroadcaster(wss, { panelService, sensorMapper, eventRepo, zoneRepo, keypadService, keypadSettings, lockService, driverStatus, alarmEvents });
 
 // After the siren and broadcaster are listening: re-schedules an exit/entry delay that was in
 // flight when the service last stopped (SC-006), which may itself commit a transition.
+alarmEvents.resume();
 panelService.resume();
 
 httpServer.listen(config.httpPort, () => {

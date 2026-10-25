@@ -175,6 +175,32 @@ const MIGRATIONS: Migration[] = [
       ALTER TABLE alarm_panel ADD COLUMN bypassed_device_ids TEXT NOT NULL DEFAULT '[]';
     `,
   },
+  {
+    // Ring spec phase 3: alarm events with their siren and monitoring-dispatch lifecycle, and which kind of
+    // life-safety event a life-safety sensor raises (smoke, CO or flood/freeze).
+    id: '009_alarm_events',
+    sql: `
+      CREATE TABLE alarm_events (
+        id TEXT PRIMARY KEY,
+        type TEXT NOT NULL CHECK (type IN (
+          'BURGLARY', 'SMOKE', 'CO', 'PANIC', 'FIRE_MEDICAL', 'DURESS', 'SOS', 'FLOOD_FREEZE'
+        )),
+        service TEXT CHECK (service IN ('police', 'fire', 'medical')),
+        trigger_device_id TEXT,
+        started_at INTEGER NOT NULL,
+        siren_state TEXT NOT NULL CHECK (siren_state IN ('none', 'sounding', 'silenced', 'timed_out', 'stopped')),
+        dispatch_state TEXT NOT NULL CHECK (dispatch_state IN ('none', 'held', 'queued', 'cancelled')),
+        dispatch_release_at INTEGER,
+        cancelled_at INTEGER,
+        ended_at INTEGER,
+        details TEXT
+      );
+      CREATE INDEX idx_alarm_events_started_at ON alarm_events(started_at);
+
+      ALTER TABLE sensor_devices ADD COLUMN alarm_kind TEXT CHECK (alarm_kind IN ('SMOKE', 'CO', 'FLOOD_FREEZE'));
+      UPDATE sensor_devices SET alarm_kind = 'SMOKE' WHERE category = 'life-safety';
+    `,
+  },
 ];
 
 function ensureMigrationsTable(db: Database.Database): void {

@@ -4,12 +4,18 @@ import { CommandClasses } from '@zwave-js/core';
 import { createLogger } from '../config/logger.js';
 import type { AlarmPanel } from './panel-repository.js';
 import type { PanelService } from './panel-service.js';
+import { SIREN_DURATION_MS, type AlarmEventService } from './alarm-event-service.js';
 
 const logger = createLogger('alarm/siren');
 
 export interface SirenOptions {
   /** Z-Wave node id of the configured siren/alert device, from `config.sirenNodeId`. Null if none is paired yet. */
   nodeId: number | null;
+  /**
+   * When supplied, the siren follows the alarm events: on while any open event is `sounding`, off when it is
+   * silenced, timed out (after 600 s) or closed by a disarm. Without it the siren follows `alarm_triggered`.
+   */
+  alarmEvents?: AlarmEventService;
 }
 
 /**
@@ -38,6 +44,8 @@ export class Siren {
   private desired = false;
   /** What has actually been sent to the device. */
   private applied = false;
+  private readonly alarmEvents: AlarmEventService | undefined;
+  private autoStop: NodeJS.Timeout | null = null;
 
   constructor(
     private readonly driver: Driver,
@@ -45,6 +53,7 @@ export class Siren {
     options: SirenOptions,
   ) {
     this.nodeId = options.nodeId;
+    this.alarmEvents = options.alarmEvents;
     if (this.nodeId === null) {
       // FR-013 requires the local siren to be the authoritative notification, so a fresh install
       // with no SIREN_NODE_ID set is a real gap the installer needs to notice, not a silent no-op.
@@ -52,7 +61,11 @@ export class Siren {
         'no siren device configured (SIREN_NODE_ID unset) — the local siren will not sound when the alarm triggers',
       );
     }
-    panelService.on('panel_changed', (panel: AlarmPanel) => this.handlePanelChanged(panel));
+    if (this.alarmEvents) {
+      this.alarmEvents.on('alarm_event', () => this.reevaluate());
+    } else {
+      panelService.on('panel_changed', (panel: AlarmPanel) => this.handlePanelChanged(panel));
+    }
   }
 
   /**
@@ -61,7 +74,13 @@ export class Siren {
    * had to wait for it — notably an `alarm_triggered` restored after a restart — takes effect.
    */
   sync(): void {
-    this.desired = this.panelService.getState().mode === 'alarm_triggered';
+    this.reevaluate();
+  }
+
+  private reevaluate(): void {
+    this.desired = this.alarmEvents
+      ? this.alarmEvents.hasSounding()
+      : this.panelService.getState().mode === 'alarm_triggered';
     this.apply();
   }
 
@@ -79,7 +98,27 @@ export class Siren {
       return;
     }
     this.applied = this.desired;
+    this.scheduleAutoStop();
     void this.setSirenState(this.desired);
+  }
+
+  /** The siren stops by itself after 600 s (Ring spec, Sirens); the event stays open until a disarm. */
+  private scheduleAutoStop(): void {
+    if (this.autoStop) {
+      clearTimeout(this.autoStop);
+      this.autoStop = null;
+    }
+    if (!this.desired || !this.alarmEvents) {
+      return;
+    }
+    const startedAt = this.alarmEvents.oldestSoundingStartedAt() ?? Date.now();
+    const remainingMs = Math.max(0, startedAt + SIREN_DURATION_MS - Date.now());
+    this.autoStop = setTimeout(() => {
+      this.autoStop = null;
+      logger.info('siren reached its maximum duration; stopping it');
+      this.alarmEvents?.timeOutSiren();
+    }, remainingMs);
+    this.autoStop.unref();
   }
 
   /** `driver.controller` throws until the driver has started (zwave-js's own "not yet ready" guard). */
