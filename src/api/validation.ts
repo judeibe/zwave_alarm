@@ -8,7 +8,7 @@ import {
 } from '../alarm/siren-repository.js';
 import { MAX_EVENT_PAGE, SECURITY_EVENT_TYPES } from '../events/event-repository.js';
 import { isValidTimeZone, WEEKDAYS } from '../auth/guest-schedule.js';
-import { SENSOR_PLACEMENTS } from '../db/repositories/sensor-repository.js';
+import { CHIRP_TONES, SENSOR_PLACEMENTS } from '../db/repositories/sensor-repository.js';
 import { MODE_DELAY_MAX_SEC, MODE_DELAY_MIN_SEC } from '../db/repositories/mode-config-repository.js';
 
 // Upper bounds keep a hostile body from feeding an unbounded string to scrypt/SQLite.
@@ -62,6 +62,7 @@ export const updateZoneBodySchema = z
 
 const placement = z.enum(SENSOR_PLACEMENTS);
 const alarmKind = z.enum(['SMOKE', 'CO', 'FLOOD_FREEZE']);
+const chirpTone = z.enum(CHIRP_TONES);
 const armedFlags = z.object({ home: z.boolean(), away: z.boolean() }).partial().refine(nonEmpty, NON_EMPTY_MESSAGE);
 
 /**
@@ -69,7 +70,7 @@ const armedFlags = z.object({ home: z.boolean(), away: z.boolean() }).partial().
  * intrusion sensors only (the route rejects it for life-safety).
  */
 export const updateSensorBodySchema = z
-  .object({ name, category: z.enum(['intrusion', 'life-safety']), zoneId: z.string().min(1), placement, armed: armedFlags, alertsOnly: z.boolean(), alarmKind })
+  .object({ name, category: z.enum(['intrusion', 'life-safety']), zoneId: z.string().min(1), placement, armed: armedFlags, alertsOnly: z.boolean(), alarmKind, chirpTone })
   .partial()
   .refine(nonEmpty, NON_EMPTY_MESSAGE);
 
@@ -82,6 +83,7 @@ export const assignSensorBodySchema = z.object({
   armed: armedFlags.optional(),
   alertsOnly: z.boolean().optional(),
   alarmKind: alarmKind.optional(),
+  chirpTone: chirpTone.optional(),
 });
 
 /**
@@ -110,11 +112,18 @@ export const sirenBodySchema = z.object({
 });
 
 const delaySeconds = z.number().int().min(MODE_DELAY_MIN_SEC).max(MODE_DELAY_MAX_SEC);
-const modeDelays = z.object({ entryDelaySec: delaySeconds, exitDelaySec: delaySeconds }).partial().refine(nonEmpty, NON_EMPTY_MESSAGE);
+const modeDelays = z
+  .object({ entryDelaySec: delaySeconds, exitDelaySec: delaySeconds, chirpsEnabled: z.boolean() })
+  .partial()
+  .refine(nonEmpty, NON_EMPTY_MESSAGE);
+const disarmedMode = z.object({ chirpsEnabled: z.boolean() }).refine(nonEmpty, NON_EMPTY_MESSAGE);
 
-/** `PATCH /api/v1/modes` body: per-mode entry/exit delay, 0-180 whole seconds. */
+/**
+ * `PATCH /api/v1/modes` body: per-mode entry/exit delay (0-180 whole seconds) and `chirpsEnabled`; `disarmed`
+ * takes `chirpsEnabled` only.
+ */
 export const updateModesBodySchema = z
-  .object({ armed_home: modeDelays, armed_away: modeDelays })
+  .object({ armed_home: modeDelays, armed_away: modeDelays, disarmed: disarmedMode })
   .partial()
   .refine(nonEmpty, NON_EMPTY_MESSAGE);
 
@@ -253,7 +262,7 @@ export const lockoutPolicyUpdateSchema = z
 
 /** `PATCH /api/v1/keypad-settings` body. */
 export const keypadSettingsUpdateSchema = z
-  .object({ requireCodeToArm: z.boolean() })
+  .object({ requireCodeToArm: z.boolean(), volume: z.number().int().min(0).max(99) })
   .partial()
   .refine((body) => Object.keys(body).length > 0, 'must include at least one field to change');
 

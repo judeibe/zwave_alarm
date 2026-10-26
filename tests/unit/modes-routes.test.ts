@@ -67,8 +67,9 @@ describe('mode routes', () => {
 
     expect(res.status).toBe(200);
     expect(res.body).toEqual({
-      armed_home: { entryDelaySec: 60, exitDelaySec: 60 },
-      armed_away: { entryDelaySec: 60, exitDelaySec: 60 },
+      armed_home: { entryDelaySec: 60, exitDelaySec: 60, chirpsEnabled: false },
+      armed_away: { entryDelaySec: 60, exitDelaySec: 60, chirpsEnabled: false },
+      disarmed: { chirpsEnabled: false },
     });
   });
 
@@ -79,8 +80,8 @@ describe('mode routes', () => {
     const res = await agent.patch('/api/v1/modes').send({ armed_away: { exitDelaySec: 120 } });
 
     expect(res.status).toBe(200);
-    expect(res.body.armed_away).toEqual({ entryDelaySec: 60, exitDelaySec: 120 });
-    expect(res.body.armed_home).toEqual({ entryDelaySec: 60, exitDelaySec: 60 });
+    expect(res.body.armed_away).toEqual({ entryDelaySec: 60, exitDelaySec: 120, chirpsEnabled: false });
+    expect(res.body.armed_home).toEqual({ entryDelaySec: 60, exitDelaySec: 60, chirpsEnabled: false });
     expect((await agent.get('/api/v1/panel')).body.modes).toEqual(res.body);
   });
 
@@ -108,6 +109,6 @@ describe('mode routes', () => {
 
     repo.ensureSeeded({ exitDelaySec: 90, entryDelaySec: 90 });
 
-    expect(repo.getAll().armed_home).toEqual({ entryDelaySec: 5, exitDelaySec: 45 });
+    expect(repo.getAll().armed_home).toEqual({ entryDelaySec: 5, exitDelaySec: 45, chirpsEnabled: false });
   });
 });

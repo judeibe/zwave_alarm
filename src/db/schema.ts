@@ -350,6 +350,30 @@ const MIGRATIONS: Migration[] = [
       );
     `,
   },
+  {
+    // Ring spec phase 6b: a per-mode "chirps" switch (including DISARMED), a chirp tone per sensor and a keypad
+    // volume. `mode_config` is rebuilt to allow a `disarmed` row (SQLite cannot widen a CHECK). Chirps start off,
+    // so deploying this does not make the keypad start chiming on its own.
+    id: '016_keypad_chirps',
+    sql: `
+      CREATE TABLE mode_config_new (
+        mode TEXT PRIMARY KEY CHECK (mode IN ('disarmed', 'armed_home', 'armed_away')),
+        entry_delay_sec INTEGER NOT NULL CHECK (entry_delay_sec BETWEEN 0 AND 180),
+        exit_delay_sec INTEGER NOT NULL CHECK (exit_delay_sec BETWEEN 0 AND 180),
+        chirps_enabled INTEGER NOT NULL DEFAULT 0 CHECK (chirps_enabled IN (0, 1))
+      );
+      INSERT INTO mode_config_new (mode, entry_delay_sec, exit_delay_sec, chirps_enabled)
+        SELECT mode, entry_delay_sec, exit_delay_sec, 0 FROM mode_config;
+      DROP TABLE mode_config;
+      ALTER TABLE mode_config_new RENAME TO mode_config;
+      INSERT OR IGNORE INTO mode_config (mode, entry_delay_sec, exit_delay_sec, chirps_enabled) VALUES ('disarmed', 0, 0, 0);
+
+      ALTER TABLE sensor_devices ADD COLUMN chirp_tone TEXT;
+      UPDATE sensor_devices SET chirp_tone = 'double_beep' WHERE category = 'intrusion';
+
+      ALTER TABLE keypad_settings ADD COLUMN volume INTEGER CHECK (volume BETWEEN 0 AND 99);
+    `,
+  },
 ];
 
 function ensureMigrationsTable(db: Database.Database): void {

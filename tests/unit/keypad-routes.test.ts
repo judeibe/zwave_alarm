@@ -111,7 +111,7 @@ describe('keypad routes', () => {
 
       const res = await agent.get('/api/v1/keypad-settings').expect(200);
 
-      expect(res.body).toEqual({ requireCodeToArm: false });
+      expect(res.body).toEqual({ requireCodeToArm: false, volume: 60 });
     });
 
     it('lets an administrator change it, and the change sticks', async () => {
@@ -121,8 +121,8 @@ describe('keypad routes', () => {
       const patched = await agent.patch('/api/v1/keypad-settings').send({ requireCodeToArm: true }).expect(200);
       const read = await agent.get('/api/v1/keypad-settings').expect(200);
 
-      expect(patched.body).toEqual({ requireCodeToArm: true });
-      expect(read.body).toEqual({ requireCodeToArm: true });
+      expect(patched.body).toEqual({ requireCodeToArm: true, volume: 60 });
+      expect(read.body).toEqual({ requireCodeToArm: true, volume: 60 });
     });
 
     it('refuses a member changing it, and rejects an empty or malformed body', async () => {

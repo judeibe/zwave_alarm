@@ -9,7 +9,7 @@ function build(requireCodeToArm = false) {
 
 describe('KeypadSettingsService', () => {
   it.each([true, false])('falls back to the environment default (%s) until a value is chosen', (fallback) => {
-    expect(build(fallback).get()).toEqual({ requireCodeToArm: fallback });
+    expect(build(fallback).get()).toEqual({ requireCodeToArm: fallback, volume: 60 });
   });
 
   it('persists a chosen value over the default', () => {
@@ -18,7 +18,7 @@ describe('KeypadSettingsService', () => {
     first.update({ requireCodeToArm: true });
 
     const afterRestart = new KeypadSettingsService(new KeypadSettingsRepository(db), { requireCodeToArm: false });
-    expect(afterRestart.get()).toEqual({ requireCodeToArm: true });
+    expect(afterRestart.get()).toEqual({ requireCodeToArm: true, volume: 60 });
   });
 
   it('emits settings_changed only when the value actually changes', () => {
@@ -30,11 +30,11 @@ describe('KeypadSettingsService', () => {
     expect(listener).not.toHaveBeenCalled();
 
     service.update({ requireCodeToArm: true });
-    expect(listener).toHaveBeenCalledWith({ requireCodeToArm: true });
+    expect(listener).toHaveBeenCalledWith({ requireCodeToArm: true, volume: 60 });
   });
 
   it('ignores an empty update', () => {
     const service = build(true);
-    expect(service.update({})).toEqual({ requireCodeToArm: true });
+    expect(service.update({})).toEqual({ requireCodeToArm: true, volume: 60 });
   });
 });

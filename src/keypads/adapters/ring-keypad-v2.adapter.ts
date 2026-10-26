@@ -140,6 +140,8 @@ export const ringKeypadV2Adapter: KeypadAdapter = {
         return [indicatorWrite(MODE_INDICATORS[indication.mode], PROPERTY.onOff, MODE_BRIGHTNESS)];
       case 'alarm':
         return [indicatorWrite(INDICATOR.burglarAlarm, PROPERTY.onOff, 1)];
+      case 'alarm_off':
+        return [indicatorWrite(INDICATOR.burglarAlarm, PROPERTY.onOff, 0)];
       case 'entry_delay':
         return [indicatorWrite(INDICATOR.entryDelay, PROPERTY.timeoutSeconds, clamp(indication.seconds, 1, MAX_INDICATOR_SECONDS))];
       case 'exit_delay':

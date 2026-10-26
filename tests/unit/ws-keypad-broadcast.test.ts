@@ -109,7 +109,7 @@ describe('keypad websocket events', () => {
 
     harness.keypadSettings.update({ requireCodeToArm: true });
 
-    expect(await nextMessage(1)).toEqual({ type: 'keypad.settings', settings: { requireCodeToArm: true } });
+    expect(await nextMessage(1)).toEqual({ type: 'keypad.settings', settings: { requireCodeToArm: true, volume: 60 } });
   });
 
   it('leaves the snapshot without keypads when no keypad service is wired', async () => {
