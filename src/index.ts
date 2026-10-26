@@ -131,6 +131,8 @@ const keypadSettings = new KeypadSettingsService(new KeypadSettingsRepository(db
 new KeypadController(keypadService, panelService, userRepo, lockoutService, eventRepo, zoneRepo, {
   requireCodeToArm: () => keypadSettings.get().requireCodeToArm,
   guestSchedules,
+  alarmEvents,
+  chirpVolume: () => keypadSettings.get().volume,
 }).start();
 
 const app = createApp({ panelService, userRepo, zoneRepo, sensorRepo, lockoutService, eventRepo, alarmEvents, sirenRepo, guestSchedules, modeSchedules, lockModeSettings, lockCodeSync, lockCodeSlots, haLinkRepo, driver, keypadService, keypadSettings, lockService, driverState: getDriverState });

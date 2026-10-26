@@ -6,7 +6,7 @@ import { createLogger } from '../config/logger.js';
 import type { SensorDevice, SensorRepository } from '../db/repositories/sensor-repository.js';
 import { soundsSiren, type AlarmEventService } from './alarm-event-service.js';
 import type { AlarmEvent, AlarmEventType, EmergencyService } from './alarm-event-repository.js';
-import type { ModeConfig, ModeConfigRepository, ModeDelays } from '../db/repositories/mode-config-repository.js';
+import type { ModeChanges, ModeConfig, ModeConfigRepository, ModeDelays } from '../db/repositories/mode-config-repository.js';
 
 const logger = createLogger('alarm/panel');
 
@@ -71,7 +71,7 @@ export interface PanelCommandOptions {
 }
 
 export type SensorBreachInput = Pick<SensorDevice, 'id' | 'zoneId' | 'category'> &
-  Partial<Pick<SensorDevice, 'placement' | 'armedHome' | 'armedAway' | 'alertsOnly' | 'alarmKind'>>;
+  Partial<Pick<SensorDevice, 'placement' | 'armedHome' | 'armedAway' | 'alertsOnly' | 'alarmKind' | 'chirpTone'>>;
 
 export interface TriggerAlarmContext {
   relatedZoneId?: string | null;
@@ -179,14 +179,16 @@ export class PanelService extends EventEmitter {
 
   /** The per-mode entry and exit delays, for snapshots and `panel.changed`. */
   getModes(): ModeConfig {
-    return this.modeConfig?.getAll() ?? {
-      armed_home: this.delaysFor('armed_home'),
-      armed_away: this.delaysFor('armed_away'),
+    const stored = this.modeConfig?.getAll();
+    return {
+      armed_home: { ...this.delaysFor('armed_home'), chirpsEnabled: stored?.armed_home.chirpsEnabled ?? false },
+      armed_away: { ...this.delaysFor('armed_away'), chirpsEnabled: stored?.armed_away.chirpsEnabled ?? false },
+      disarmed: { chirpsEnabled: stored?.disarmed.chirpsEnabled ?? false },
     };
   }
 
   /** Persists a delay change and tells listeners (the WebSocket broadcaster) via `panel_changed`. */
-  updateModes(changes: Partial<Record<ArmedMode, Partial<ModeDelays>>>): ModeConfig {
+  updateModes(changes: ModeChanges): ModeConfig {
     if (!this.modeConfig) {
       throw new PanelStateError('Mode configuration is not available.');
     }
@@ -226,6 +228,13 @@ export class PanelService extends EventEmitter {
 
   /** Intrusion sensors are armed-state-gated (FR-003); life-safety sensors always trigger immediately (FR-015). */
   reportSensorBreach(sensor: SensorBreachInput): AlarmPanel {
+    const panel = this.evaluateBreach(sensor);
+    // Lets listeners (the keypads' chirps) react to a trip with the panel state it led to.
+    this.emit('sensor_tripped', sensor, panel);
+    return panel;
+  }
+
+  private evaluateBreach(sensor: SensorBreachInput): AlarmPanel {
     if (sensor.category === 'life-safety') {
       return this.triggerAlarm({
         relatedZoneId: sensor.zoneId,

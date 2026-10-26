@@ -1,7 +1,7 @@
 import type Database from 'better-sqlite3';
 import { randomUUID } from 'node:crypto';
 import { Repository } from '../repository.js';
-import type { ConnectivityStatus, SensorAlarmKind, SensorCategory, SensorDevice, SensorPlacement, SensorState } from './sensor-repository.js';
+import type { ChirpTone, ConnectivityStatus, SensorAlarmKind, SensorCategory, SensorDevice, SensorPlacement, SensorState } from './sensor-repository.js';
 
 export type { ConnectivityStatus, SensorCategory, SensorState };
 
@@ -34,6 +34,7 @@ interface ZoneSensorRow {
   sensor_armed_away: number | null;
   sensor_alerts_only: number | null;
   sensor_alarm_kind: SensorAlarmKind | null;
+  sensor_chirp_tone: ChirpTone | null;
   sensor_tampered: number | null;
   sensor_updated_at: number | null;
 }
@@ -53,6 +54,7 @@ function toSensor(row: ZoneSensorRow): ZoneSensor {
     armedAway: row.sensor_armed_away === 1,
     alertsOnly: row.sensor_alerts_only === 1,
     alarmKind: row.sensor_alarm_kind,
+    chirpTone: row.sensor_chirp_tone,
     tampered: row.sensor_tampered === 1,
     updatedAt: row.sensor_updated_at as number,
   };
@@ -106,7 +108,7 @@ export class ZoneRepository extends Repository {
          s.name AS sensor_name, s.category AS sensor_category, s.current_state AS sensor_current_state,
          s.battery_level AS sensor_battery_level, s.connectivity_status AS sensor_connectivity_status,
          s.placement AS sensor_placement, s.armed_home AS sensor_armed_home, s.armed_away AS sensor_armed_away,
-         s.alerts_only AS sensor_alerts_only, s.alarm_kind AS sensor_alarm_kind, s.tampered AS sensor_tampered, s.updated_at AS sensor_updated_at
+         s.alerts_only AS sensor_alerts_only, s.alarm_kind AS sensor_alarm_kind, s.chirp_tone AS sensor_chirp_tone, s.tampered AS sensor_tampered, s.updated_at AS sensor_updated_at
        FROM zones z
        LEFT JOIN sensor_devices s ON s.zone_id = z.id
        ORDER BY z.created_at ASC, s.updated_at ASC`,

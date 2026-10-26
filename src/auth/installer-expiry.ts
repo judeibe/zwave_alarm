@@ -26,7 +26,19 @@ export function startInstallerExpirySweep(
       for (const user of userRepo.listExpiredInstallers(now())) {
         try {
           // Take the installer's code off the locks while the record of its slots still exists.
-          await options.beforeRemove?.(user);
+          const results = await options.beforeRemove?.(user);
+          const failed = Array.isArray(results)
+            ? (results as { nodeId: number; slot: number | null; status: string }[]).filter((entry) => entry.status === 'failed')
+            : [];
+          if (failed.length > 0) {
+            // The account is removed regardless, and with it the record of where its code sits, so this line
+            // is what says which lock slots to clear by hand.
+            logger.warn('expired installer code could not be cleared from a lock', {
+              userId: user.id,
+              name: user.name,
+              locks: failed.map((entry) => ({ nodeId: entry.nodeId, slot: entry.slot })),
+            });
+          }
         } catch (err) {
           logger.warn('could not clear an expired installer from the locks', {
             userId: user.id,

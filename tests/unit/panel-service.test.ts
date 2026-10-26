@@ -320,10 +320,11 @@ describe('PanelService trigger evaluation (per-mode delays and placements)', () 
     const { service } = build();
 
     expect(service.getModes()).toEqual({
-      armed_home: { entryDelaySec: 10, exitDelaySec: 5 },
-      armed_away: { entryDelaySec: 10, exitDelaySec: 5 },
+      armed_home: { entryDelaySec: 10, exitDelaySec: 5, chirpsEnabled: false },
+      armed_away: { entryDelaySec: 10, exitDelaySec: 5, chirpsEnabled: false },
+      disarmed: { chirpsEnabled: false },
     });
-    expect(service.updateModes({ armed_home: { entryDelaySec: 0 } }).armed_home).toEqual({ entryDelaySec: 0, exitDelaySec: 5 });
+    expect(service.updateModes({ armed_home: { entryDelaySec: 0 } }).armed_home).toEqual({ entryDelaySec: 0, exitDelaySec: 5, chirpsEnabled: false });
   });
 });
 

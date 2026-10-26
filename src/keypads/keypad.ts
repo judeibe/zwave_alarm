@@ -30,6 +30,8 @@ export function toPublicInput(input: KeypadInput): PublicKeypadInput {
 export type KeypadIndication =
   | { kind: 'mode'; mode: 'disarmed' | 'armed_home' | 'armed_away' }
   | { kind: 'alarm' }
+  /** Stop the keypad's own siren (silenced, timed out or disarmed) without changing its mode lights. */
+  | { kind: 'alarm_off' }
   | { kind: 'entry_delay'; seconds: number }
   | { kind: 'exit_delay'; seconds: number }
   | { kind: 'code_rejected' }

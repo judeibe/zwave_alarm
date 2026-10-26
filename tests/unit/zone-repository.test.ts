@@ -54,6 +54,7 @@ describe('ZoneRepository', () => {
         armedAway: true,
         alertsOnly: false,
         alarmKind: null,
+        chirpTone: null,
         tampered: false,
         updatedAt: 0,
       },

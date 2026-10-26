@@ -1,7 +1,8 @@
 import { createLogger } from '../config/logger.js';
 import type { AlarmPanel } from '../alarm/panel-repository.js';
-import { PanelStateError, type PanelService } from '../alarm/panel-service.js';
+import { NeedsBypassError, PanelStateError, type PanelService, type SensorBreachInput } from '../alarm/panel-service.js';
 import { CommandRejectedError } from '../alarm/dispatcher.js';
+import type { AlarmEventService } from '../alarm/alarm-event-service.js';
 import { isWithinSchedules, type GuestScheduleRepository } from '../auth/guest-schedule.js';
 import { isExpired, type User, type UserRepository } from '../auth/user-repository.js';
 import type { LockoutService } from '../auth/lockout-service.js';
@@ -19,6 +20,25 @@ export interface KeypadControllerOptions {
   now?: () => number;
   /** When supplied, a guest's code works at the keypad only inside one of their schedules (none = always). */
   guestSchedules?: GuestScheduleRepository;
+  /**
+   * When supplied, the keypad siren follows the alarm events (on while one is sounding; off when it is silenced,
+   * times out or a disarm ends it) instead of the panel's `alarm_triggered` mode.
+   */
+  alarmEvents?: AlarmEventService;
+  /** Level (0-99) for sensor chirps; read when each chirp plays. */
+  chirpVolume?: () => number;
+}
+
+/** How long after a "bypass needed" prompt the same arm request, repeated, confirms the bypass. */
+export const BYPASS_CONFIRM_WINDOW_MS = 10_000;
+
+/** A "bypass needed" prompt waiting for the arm request to be repeated. */
+interface PendingBypass {
+  mode: 'armed_away' | 'armed_home';
+  /** Who asked (null when arming needs no code). The confirming request must be from the same user. */
+  userId: string | null;
+  sensorIds: string[];
+  expiresAt: number;
 }
 
 /**
@@ -28,6 +48,9 @@ export interface KeypadControllerOptions {
  */
 export class KeypadController {
   private readonly now: () => number;
+  /** Whether the keypads' own siren is currently on, so it is only switched when that changes. */
+  private sirenOn = false;
+  private pendingBypass: PendingBypass | null = null;
 
   constructor(
     private readonly keypads: KeypadService,
@@ -53,7 +76,18 @@ export class KeypadController {
       });
     });
     this.panelService.on('panel_changed', (panel: AlarmPanel) => {
-      void this.keypads.indicateAll(this.indicationFor(panel));
+      void this.show(this.indicationFor(panel));
+    });
+    // The keypad siren follows the alarm events: silenced, timed out or ended means off, even while the panel
+    // stays in alarm. A silent event (medical, duress, flood) never turns it on.
+    this.options.alarmEvents?.on('alarm_event', () => {
+      if (this.isSounding() !== this.sirenOn) {
+        void this.show(this.indicationFor(this.panelService.getState()));
+      }
+    });
+    // A tripped sensor chirps on the keypads, if the current mode has chirps on and the sensor has a tone.
+    this.panelService.on('sensor_tripped', (sensor: SensorBreachInput, panel: AlarmPanel) => {
+      void this.chirp(sensor, panel);
     });
     // A keypad that appears, or comes back online, shows the current panel state straight away.
     this.keypads.on('keypad_changed', (keypad: KeypadSummary) => {
@@ -104,15 +138,33 @@ this.panelService.raiseEmergency(
       user = auth.user;
     }
     try {
-      // The keypad's confirm-bypass prompt (the Gen1 check key) is not built yet, so until then a keypad arm
-      // bypasses faulted sensors rather than leaving the keypad unable to arm with a door open.
+      // A repeat of the same arm request within the confirm window, from the same user, accepts the bypass of
+      // the sensors the keypad just asked about. (The Gen2 keypad has no check key; this repeat is the confirm.)
+      const pending = this.pendingBypass;
+      const confirming =
+        pending !== null && pending.expiresAt > this.now() && pending.mode === mode && pending.userId === (user?.id ?? null);
+      this.pendingBypass = null;
       await this.panelService.arm(mode, {
         source: 'native',
         sourceUserId: user?.id ?? null,
         armSource: 'keypad',
-        autoBypass: true,
+        ...(confirming && pending && { bypass: pending.sensorIds }),
       });
     } catch (err) {
+      if (err instanceof NeedsBypassError) {
+        this.pendingBypass = {
+          mode,
+          userId: user?.id ?? null,
+          sensorIds: err.faulted.map((entry) => entry.sensorId),
+          expiresAt: this.now() + BYPASS_CONFIRM_WINDOW_MS,
+        };
+        logger.info('keypad arm needs a bypass; waiting for it to be repeated', {
+          nodeId,
+          sensors: err.faulted.map((entry) => entry.name),
+        });
+        await this.keypads.indicate(nodeId, { kind: 'bypass_required' });
+        return;
+      }
       if (!this.isExpectedRefusal(err)) throw err;
       logger.info('keypad arm request refused', { nodeId, reason: err.message });
     }
@@ -228,7 +280,44 @@ this.panelService.raiseEmergency(
       case 'alarm_pending':
         return { kind: 'entry_delay', seconds: secondsLeft };
       case 'alarm_triggered':
-        return { kind: 'alarm' };
+        // Alarm, but with the siren silenced or timed out the keypad goes back to showing the armed mode.
+        return this.isSounding()
+          ? { kind: 'alarm' }
+          : { kind: 'mode', mode: panel.armedMode ?? 'disarmed' };
     }
+  }
+
+  /** Whether an alarm is making noise now (the panel's alarm state when alarm events are not tracked). */
+  private isSounding(): boolean {
+    return this.options.alarmEvents
+      ? this.options.alarmEvents.hasSounding()
+      : this.panelService.getState().mode === 'alarm_triggered';
+  }
+
+  /** Shows an indication on every keypad, stopping their siren first if it was on and this isn't the alarm. */
+  private async show(indication: KeypadIndication): Promise<void> {
+    if (indication.kind === 'alarm') {
+      if (this.sirenOn) {
+        return;
+      }
+      this.sirenOn = true;
+    } else if (this.sirenOn) {
+      this.sirenOn = false;
+      await this.keypads.indicateAll({ kind: 'alarm_off' });
+    }
+    await this.keypads.indicateAll(indication);
+  }
+
+  private async chirp(sensor: SensorBreachInput, panel: AlarmPanel): Promise<void> {
+    const mode = panel.mode === 'disarmed' || panel.mode === 'armed_home' || panel.mode === 'armed_away' ? panel.mode : null;
+    const tone = sensor.chirpTone;
+    // Not during a delay or an alarm (the delay tones and the siren already speak), and not for a muted sensor.
+    if (mode === null || sensor.category !== 'intrusion' || !tone || tone === 'none') {
+      return;
+    }
+    if (!this.panelService.getModes()[mode].chirpsEnabled) {
+      return;
+    }
+    await this.keypads.chimeAll(tone, this.options.chirpVolume?.());
   }
 }

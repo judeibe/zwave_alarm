@@ -152,6 +152,20 @@ export class KeypadService extends EventEmitter {
     await Promise.all(targets.map((nodeId) => this.indicate(nodeId, indication)));
   }
 
+  /** Plays a chime on every keypad that can, skipping any that doesn't know `sound`. Failures are logged, not thrown. */
+  async chimeAll(sound: string, volume?: number): Promise<void> {
+    const targets = [...this.keypads]
+      .filter(([, entry]) => entry.adapter.capabilities.includes('chime') && entry.adapter.chimeSounds.includes(sound))
+      .map(([nodeId]) => nodeId);
+    await Promise.all(
+      targets.map((nodeId) =>
+        this.chime(nodeId, sound, volume).catch((err: unknown) => {
+          logger.error('failed to chime keypad', { nodeId, sound, error: err instanceof Error ? err.message : String(err) });
+        }),
+      ),
+    );
+  }
+
   /** Plays a chime on one keypad. Throws `KeypadNotFoundError`/`KeypadUnsupportedError` for a bad request. */
   async chime(nodeId: number, sound: string, volume?: number): Promise<void> {
     const entry = this.keypads.get(nodeId);
