@@ -225,10 +225,10 @@ describe('config loader', () => {
 
     it('reads keys from the environment, lower-cased', async () => {
       setEnv();
-      process.env.ZWAVE_KEY_S0_LEGACY = '86EA21E90949AFA756A48FBD74A399F1';
+      process.env.ZWAVE_KEY_S0_LEGACY = '00112233445566778899aabbccddeeff';
       process.env.ZWAVE_LR_KEY_S2_ACCESS_CONTROL = 'a'.repeat(32);
       const { config } = await import('../../src/config/index.js');
-      expect(config.securityKeys).toEqual({ S0_Legacy: '86ea21e90949afa756a48fbd74a399f1' });
+      expect(config.securityKeys).toEqual({ S0_Legacy: '00112233445566778899aabbccddeeff' });
       expect(config.securityKeysLongRange).toEqual({ S2_AccessControl: 'a'.repeat(32) });
     });
 

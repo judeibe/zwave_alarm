@@ -303,7 +303,11 @@ describe('disarm guessing', () => {
     const limited = await agent.post('/api/v1/panel/disarm').send({ code: '0000' });
 
     expect(limited.status).toBe(429);
-    expect(limited.body.error).toMatchObject({ code: 'too_many_requests' });
-    expect(limited.body.error.message).toContain('disarm');
+    expect(limited.body.error).toEqual({ code: 'too_many_requests', message: 'Too many disarm attempts. Try again in a minute.' });
+    // The documented headers: how long to wait, and the limit's policy.
+    expect(Number(limited.headers['retry-after'])).toBeGreaterThan(0);
+    expect(Number(limited.headers['retry-after'])).toBeLessThanOrEqual(60);
+    expect(limited.headers['ratelimit-policy']).toBe('10;w=60');
+    expect(limited.headers.ratelimit).toMatch(/limit=10, remaining=0, reset=\d+/);
   });
 });

@@ -46,6 +46,8 @@ Body: `{ "mode": "armed_away" | "armed_home" }`. Requires role `administrator` o
 
 Body: `{ "code": string }` (Guest codes accepted only within their configured expiry window). Clears `alarm_triggered`/`alarm_pending`/`arming` back to `disarmed` and records an `alarm_cleared` or `disarmed` `SecurityEvent`.
 
+**Rate limit (v3.4.0+).** Besides the per-account lockout, failed disarm attempts are limited per client IP: after **10 failed attempts within a minute**, further attempts return **`429 Too Many Requests`** until the window passes. Only failed attempts (any `4xx`/`5xx`) count; a successful disarm does not. The body is the standard error format: `{ "error": { "code": "too_many_requests", "message": "Too many disarm attempts. Try again in a minute." } }`. The response carries `Retry-After: <seconds until the window resets>` (60 at most), plus the standard `RateLimit: limit=10, remaining=0, reset=<s>` and `RateLimit-Policy: 10;w=60` headers. Four-digit codes are a small space and, with `API_AUTH_REQUIRED` off, there is no account to lock out, which is why the limit is per IP. A client should stop retrying on a `429` and wait `Retry-After` seconds; a Home Assistant instance shares one IP, so a run of failures from it throttles every disarm from that address.
+
 **Zone-restricted guests (FR-010a).** A guest created with a `guestZoneId` disarms *only that zone*, never the whole panel. The response is the resulting panel state:
 - The panel `mode` is unchanged and the zone is added to `disarmedZoneIds`. Intrusion breaches in a disarmed zone are ignored (life-safety sensors still trigger immediately, FR-015); the zone is armed again whenever the panel is next fully disarmed or armed.
 - If the current `alarm_pending`/`alarm_triggered` was caused by a breach *in that zone*, it is cleared back to the armed mode (`armedMode`), the rest of the panel staying armed, and an `alarm_cleared` event is recorded with the zone. An alarm caused by any other zone, or by repeated wrong codes, is left as it is.
@@ -108,7 +110,7 @@ Revokes a previously issued token.
 
 ## Error format
 
-All error responses: `{ "error": { "code": string, "message": string } }` with an appropriate HTTP status (`400`, `401`, `403`, `404`, `409`, `423`, `429`, `503`).
+All error responses: `{ "error": { "code": string, "message": string } }` with an appropriate HTTP status (`400`, `401`, `403`, `404`, `409`, `423`, `429`, `503`). A route may add fields inside `error` (for example `faulted` on a `409 needs_bypass`, or `conflictsWith` on a `409 schedule_conflict`). A `429` (`too_many_requests`) always carries a `Retry-After` header: it comes from the login throttle (5 failed attempts per IP per minute), the disarm throttle (10 failed attempts per IP per minute) and the account-creation throttle (`POST /users`, 30 requests per IP per minute).
 
 ### Request validation
 

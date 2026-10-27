@@ -42,10 +42,14 @@ Adds optional `haPersonId`, `haUserId`. `code` is now optional: a user may exist
 Body: any non-empty subset of `name`, `role`, `haPersonId`, `haUserId`, `guestExpiresAt`, `guestZoneId`. Same guest validation as create. `409` if it would demote the last administrator.
 
 ### `PUT /api/v1/users/{userId}/code`
-Body: `{ "code": string }`. Sets or replaces the code; resets failed attempts and lockout. `204`, empty body. `409` (`code_in_use`) if another user's code collides (login identifies by code, so codes must be unique).
+Body: `{ "code": string, "confirmCode"?: string }`. A code that is created or changed must be exactly four digits (`400` otherwise); `confirmCode` is the optional second entry and must equal `code` when sent. Sets or replaces the code; resets failed attempts and lockout. `409` (`code_in_use`) if another user's code or duress code collides (login identifies by code, so codes must be unique); `409` (`code_limit`) when the location already holds 256 codes (duress codes included).
+
+**Response.** When lock code sync is configured (always, in the running service) the response is **`200`** with `{ "lockSync": [ { "nodeId": number, "slot": number | null, "status": "synced" | "failed", "message"?: string } ] }`, one entry per enrolled lock. It is empty (`[]`) when no lock is enrolled. A lock that is unreachable or refuses the code is a `failed` entry, not a failed request, and the user still has the code. Only when lock code sync is not configured (an embedded or test build) is the response **`204`** with an empty body. Clients should treat both as success and read `lockSync` only from a `200`; a server older than v3.7.0 always answers `204`.
 
 ### `DELETE /api/v1/users/{userId}/code`
-Clears the code (user can no longer disarm or log in). `204`. `409` for the last administrator.
+Clears the code (user can no longer disarm or log in) and clears it from the enrolled locks. Responds like `PUT`: **`200`** with `{ "lockSync": [...] }`, or **`204`** when lock code sync is not configured (and always on a server older than v3.7.0). `409` for the last administrator.
+
+`POST /api/v1/users` follows the same rule: when it creates a user with a code, the `201` body is the user plus `lockSync`.
 
 ## Events
 No `config_changed` event or websocket broadcast in v1; clients refetch after each mutation.
