@@ -100,51 +100,66 @@ function renderPanel() {
   el.disarmForm.querySelector('button[type="submit"]').disabled = !disarmable;
 }
 
-function sensorBadges(sensor) {
-  const badges = [];
-  badges.push(
-    `<span class="badge ${sensor.currentState === 'breached' ? 'badge-breached' : 'badge-normal'}">${escapeHtml(sensor.currentState)}</span>`,
-  );
-  if (sensor.connectivityStatus === 'offline') {
-    badges.push('<span class="badge badge-fault">offline</span>');
+/**
+ * The zone list is built from DOM nodes with `textContent`, never from HTML strings: zone and sensor names are
+ * typed by administrators and, since the installer role, by installers, so they must never be parsed as markup.
+ */
+function element(tag, className, text) {
+  const node = document.createElement(tag);
+  if (className) {
+    node.className = className;
   }
-  if (sensor.batteryLevel !== null && sensor.batteryLevel <= LOW_BATTERY_THRESHOLD_PERCENT) {
-    badges.push(`<span class="badge badge-fault">low battery (${sensor.batteryLevel}%)</span>`);
+  if (text !== undefined) {
+    node.textContent = text;
   }
-  return badges.join(' ');
+  return node;
 }
 
-/**
- * Escapes text for use inside an HTML template. Zone and sensor names are typed by administrators and, since the
- * installer role, by installers, so they must never be written into `innerHTML` as markup.
- */
-function escapeHtml(text) {
-  return String(text)
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;')
-    .replaceAll("'", '&#39;');
+function sensorBadges(sensor) {
+  const badges = [
+    element('span', `badge ${sensor.currentState === 'breached' ? 'badge-breached' : 'badge-normal'}`, sensor.currentState),
+  ];
+  if (sensor.connectivityStatus === 'offline') {
+    badges.push(element('span', 'badge badge-fault', 'offline'));
+  }
+  if (sensor.batteryLevel !== null && sensor.batteryLevel <= LOW_BATTERY_THRESHOLD_PERCENT) {
+    badges.push(element('span', 'badge badge-fault', `low battery (${sensor.batteryLevel}%)`));
+  }
+  return badges;
+}
+
+function sensorRow(sensor) {
+  const row = element('li', 'sensor-row');
+  const name = element('span', 'sensor-name', `${sensor.name} `);
+  name.append(element('em', '', `(${sensor.category})`));
+  row.append(name);
+  for (const badge of sensorBadges(sensor)) {
+    row.append(' ', badge);
+  }
+  return row;
+}
+
+function zoneCard(zone) {
+  const sensorList = element('ul');
+  if (zone.sensors.length === 0) {
+    const empty = element('li', 'sensor-row');
+    empty.append(element('span', 'sensor-name', 'No sensors assigned.'));
+    sensorList.append(empty);
+  } else {
+    sensorList.append(...zone.sensors.map(sensorRow));
+  }
+  const title = element('h3', '', zone.name);
+  // A zone-restricted guest can disarm just their zone while the panel stays armed (FR-010a).
+  if ((state.panel.disarmedZoneIds ?? []).includes(zone.id)) {
+    title.append(' ', element('span', 'badge badge-fault', 'zone disarmed'));
+  }
+  const card = element('li', 'zone-card');
+  card.append(title, sensorList);
+  return card;
 }
 
 function renderZones() {
-  el.zoneList.innerHTML = state.zones
-    .map((zone) => {
-      const sensorRows =
-        zone.sensors.length === 0
-          ? '<li class="sensor-row"><span class="sensor-name">No sensors assigned.</span></li>'
-          : zone.sensors
-              .map(
-                (sensor) =>
-                  `<li class="sensor-row"><span class="sensor-name">${escapeHtml(sensor.name)} <em>(${escapeHtml(sensor.category)})</em></span>${sensorBadges(sensor)}</li>`,
-              )
-              .join('');
-      // A zone-restricted guest can disarm just their zone while the panel stays armed (FR-010a).
-      const zoneDisarmed = (state.panel.disarmedZoneIds ?? []).includes(zone.id);
-      const zoneBadge = zoneDisarmed ? ' <span class="badge badge-fault">zone disarmed</span>' : '';
-      return `<li class="zone-card"><h3>${escapeHtml(zone.name)}${zoneBadge}</h3><ul>${sensorRows}</ul></li>`;
-    })
-    .join('');
+  el.zoneList.replaceChildren(...state.zones.map(zoneCard));
 }
 
 function applySensorPatch(sensorId, changes) {
