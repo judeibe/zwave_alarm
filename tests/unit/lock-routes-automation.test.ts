@@ -229,5 +229,6 @@ describe('account creation throttle', () => {
 
     expect(limited.status).toBe(429);
     expect(limited.body.error.code).toBe('too_many_requests');
+    expect(Number(limited.headers['retry-after'])).toBeGreaterThan(0);
   });
 });
