@@ -102,7 +102,7 @@ export class SensorMapper extends EventEmitter {
     this.attachedNodeIds.add(node.id);
 
     node.on('notification', (_endpoint, ccId, args) => {
-      logger.debug('node notification', { nodeId: node.id, commandClass: ccId, args });
+      logger.debug('node notification', { nodeId: node.id, commandClass: ccId, args: redactNotificationArgs(args) });
       this.handleNotification(node.id, ccId, args);
     });
     node.on('value updated', (n, args) => {
@@ -111,8 +111,7 @@ export class SensorMapper extends EventEmitter {
         commandClass: args.commandClass,
         property: args.property,
         propertyKey: args.propertyKey,
-        prevValue: args.prevValue,
-        newValue: args.newValue,
+        ...redactedValues(args),
       });
       this.handleValueUpdated(n.id, args);
     });
@@ -269,6 +268,31 @@ function notificationValueTampered(args: ZWaveNodeValueUpdatedArgs): boolean | n
     return null;
   }
   return /cover|tamper/i.test(propertyKey) ? newValue !== 0 : null;
+}
+
+const REDACTED = '[redacted]';
+
+/**
+ * Values that carry an access code: a lock's User Code slots, and the digits typed on a keypad (Entry Control's
+ * `eventData`). They must never reach the log, which is kept on the host and read by anyone with Docker access.
+ */
+function isCodeValue(args: Pick<ZWaveNodeValueUpdatedArgs, 'commandClass' | 'property'>): boolean {
+  return args.commandClass === CommandClasses['User Code'] || args.property === 'userCode';
+}
+
+/** The previous and new value of an update, with an access code replaced by a marker. */
+export function redactedValues(args: ZWaveNodeValueUpdatedArgs): { prevValue: unknown; newValue: unknown } {
+  return isCodeValue(args)
+    ? { prevValue: REDACTED, newValue: REDACTED }
+    : { prevValue: args.prevValue, newValue: args.newValue };
+}
+
+/** A notification's arguments with the typed digits (`eventData`) replaced by a marker. */
+export function redactNotificationArgs(args: unknown): unknown {
+  if (typeof args === 'object' && args !== null && 'eventData' in args) {
+    return { ...(args as Record<string, unknown>), eventData: REDACTED };
+  }
+  return args;
 }
 
 /**

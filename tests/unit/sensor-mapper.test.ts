@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { CommandClasses } from '@zwave-js/core';
 import type { Driver } from 'zwave-js';
 import { createDatabase } from '../../src/db/schema.js';
@@ -364,5 +364,62 @@ describe('SensorMapper', () => {
 
       expect(sensorRepo.findByNodeId(20)?.currentState).toBe('breached');
     });
+  });
+});
+
+describe('SensorMapper debug log', () => {
+  function collectLog(run: () => void): string {
+    const spy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const previous = process.env.LOG_LEVEL;
+    process.env.LOG_LEVEL = 'debug';
+    try {
+      run();
+      return spy.mock.calls.map((call) => String(call[0])).join('\n');
+    } finally {
+      spy.mockRestore();
+      if (previous === undefined) delete process.env.LOG_LEVEL;
+      else process.env.LOG_LEVEL = previous;
+    }
+  }
+
+  it('never writes an access code to the log: lock user codes and digits typed on a keypad', () => {
+    const { driver, mapper, intrusionSensor } = buildMapper();
+    const nodes = attachAndStart(driver, mapper, [intrusionSensor.zwaveNodeId]);
+    const node = nodes.get(10)!;
+
+    const output = collectLog(() => {
+      node.emit('value updated', { id: 10 }, {
+        commandClass: CommandClasses['User Code'],
+        commandClassName: 'User Code',
+        property: 'userCode',
+        propertyKey: 1,
+        prevValue: '4821',
+        newValue: '9317',
+      });
+      node.emit('notification', {}, CommandClasses['Entry Control'], { eventType: 3, dataType: 2, eventData: '7305' });
+    });
+
+    expect(output).not.toMatch(/4821|9317|7305/);
+    expect(output).toContain('[redacted]');
+    expect(output).toContain('node value updated');
+    expect(output).toContain('node notification');
+  });
+
+  it('still logs other values and notifications in full', () => {
+    const { driver, mapper, intrusionSensor } = buildMapper();
+    const nodes = attachAndStart(driver, mapper, [intrusionSensor.zwaveNodeId]);
+
+    const output = collectLog(() => {
+      nodes.get(10)!.emit('value updated', { id: 10 }, {
+        commandClass: CommandClasses.Battery,
+        commandClassName: 'Battery',
+        property: 'level',
+        prevValue: 91,
+        newValue: 87,
+      });
+    });
+
+    expect(output).toContain('"newValue":87');
+    expect(output).toContain('"prevValue":91');
   });
 });
