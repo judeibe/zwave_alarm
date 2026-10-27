@@ -103,7 +103,7 @@ function renderPanel() {
 function sensorBadges(sensor) {
   const badges = [];
   badges.push(
-    `<span class="badge ${sensor.currentState === 'breached' ? 'badge-breached' : 'badge-normal'}">${sensor.currentState}</span>`,
+    `<span class="badge ${sensor.currentState === 'breached' ? 'badge-breached' : 'badge-normal'}">${escapeHtml(sensor.currentState)}</span>`,
   );
   if (sensor.connectivityStatus === 'offline') {
     badges.push('<span class="badge badge-fault">offline</span>');
@@ -112,6 +112,19 @@ function sensorBadges(sensor) {
     badges.push(`<span class="badge badge-fault">low battery (${sensor.batteryLevel}%)</span>`);
   }
   return badges.join(' ');
+}
+
+/**
+ * Escapes text for use inside an HTML template. Zone and sensor names are typed by administrators and, since the
+ * installer role, by installers, so they must never be written into `innerHTML` as markup.
+ */
+function escapeHtml(text) {
+  return String(text)
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
 }
 
 function renderZones() {
@@ -123,13 +136,13 @@ function renderZones() {
           : zone.sensors
               .map(
                 (sensor) =>
-                  `<li class="sensor-row"><span class="sensor-name">${sensor.name} <em>(${sensor.category})</em></span>${sensorBadges(sensor)}</li>`,
+                  `<li class="sensor-row"><span class="sensor-name">${escapeHtml(sensor.name)} <em>(${escapeHtml(sensor.category)})</em></span>${sensorBadges(sensor)}</li>`,
               )
               .join('');
       // A zone-restricted guest can disarm just their zone while the panel stays armed (FR-010a).
       const zoneDisarmed = (state.panel.disarmedZoneIds ?? []).includes(zone.id);
       const zoneBadge = zoneDisarmed ? ' <span class="badge badge-fault">zone disarmed</span>' : '';
-      return `<li class="zone-card"><h3>${zone.name}${zoneBadge}</h3><ul>${sensorRows}</ul></li>`;
+      return `<li class="zone-card"><h3>${escapeHtml(zone.name)}${zoneBadge}</h3><ul>${sensorRows}</ul></li>`;
     })
     .join('');
 }
