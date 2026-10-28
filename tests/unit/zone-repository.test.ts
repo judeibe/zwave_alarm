@@ -60,6 +60,7 @@ describe('ZoneRepository', () => {
         sensorKind: 'door',
         entryway: null,
         isInterior: false,
+        quickExitEnabled: false,
         quickEntrySupported: false,
         tampered: false,
         updatedAt: 0,

@@ -72,6 +72,8 @@ const entrySettings = {
   sensorKind,
   entryway,
   isInterior: z.boolean(),
+  quickExitEnabled: z.boolean(),
+  /** Old name of quickExitEnabled. */
   quickEntrySupported: z.boolean(),
 };
 const armedFlags = z.object({ home: z.boolean(), away: z.boolean() }).partial().refine(nonEmpty, NON_EMPTY_MESSAGE);
@@ -100,6 +102,7 @@ export const assignSensorBodySchema = z.object({
   sensorKind: sensorKind.optional(),
   entryway: entryway.optional(),
   isInterior: entrySettings.isInterior.optional(),
+  quickExitEnabled: entrySettings.quickExitEnabled.optional(),
   quickEntrySupported: entrySettings.quickEntrySupported.optional(),
 });
 

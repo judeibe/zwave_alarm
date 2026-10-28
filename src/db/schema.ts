@@ -391,6 +391,14 @@ const MIGRATIONS: Migration[] = [
         WHERE category = 'life-safety' OR placement IN ('ROOM', 'ENTRYWAY');
     `,
   },
+  {
+    // The field was first named for quick *entry*; the feature is quick exit (press the sensor's button, then
+    // open its door within a few seconds without tripping the alarm). Values carry over; the API keeps the old name as an alias.
+    id: '018_quick_exit',
+    sql: `
+      ALTER TABLE sensor_devices RENAME COLUMN quick_entry_supported TO quick_exit_enabled;
+    `,
+  },
 ];
 
 function ensureMigrationsTable(db: Database.Database): void {

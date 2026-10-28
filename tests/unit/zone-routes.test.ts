@@ -344,14 +344,36 @@ describe('zone routes', () => {
       const zone = (await agent.post('/api/v1/zones').send({ name: 'Z' })).body;
       const created = await agent.post(`/api/v1/zones/${zone.id}/sensors`).send({ zwaveNodeId: 7, name: 'Front', category: 'intrusion', entryway: 'Front door', chimeEnabled: true, chimeSound: 'doorbell' });
       expect(created.status).toBe(201);
-      expect(created.body).toMatchObject({ sensorKind: 'door', entryway: 'Front door', chimeEnabled: true, chimeSound: 'doorbell', chirpTone: 'doorbell', isInterior: false, quickEntrySupported: false });
+      expect(created.body).toMatchObject({ sensorKind: 'door', entryway: 'Front door', chimeEnabled: true, chimeSound: 'doorbell', chirpTone: 'doorbell', isInterior: false, quickExitEnabled: false });
 
-      const patched = await agent.patch(`/api/v1/sensors/${created.body.id}`).send({ chimeEnabled: false, quickEntrySupported: true, sensorKind: 'window', isInterior: true, entryway: null });
+      const patched = await agent.patch(`/api/v1/sensors/${created.body.id}`).send({ chimeEnabled: false, quickExitEnabled: true, sensorKind: 'window', isInterior: true, entryway: null });
 
       expect(patched.status).toBe(200);
-      expect(patched.body).toMatchObject({ chimeEnabled: false, chimeSound: 'doorbell', quickEntrySupported: true, sensorKind: 'window', isInterior: true, entryway: null });
-      expect((await agent.get(`/api/v1/sensors/${created.body.id}`)).body).toMatchObject({ quickEntrySupported: true });
+      expect(patched.body).toMatchObject({ chimeEnabled: false, chimeSound: 'doorbell', quickExitEnabled: true, sensorKind: 'window', isInterior: true, entryway: null });
+      expect((await agent.get(`/api/v1/sensors/${created.body.id}`)).body).toMatchObject({ quickExitEnabled: true });
       expect((await agent.get('/api/v1/sensors')).body).toHaveLength(1);
+    });
+
+    it('opens a quick-exit window only for a sensor with quick exit enabled, and keeps the old field name working', async () => {
+      const { app, userRepo, nodeMap } = await buildHarness();
+      const agent = await loginAs(app, userRepo, 'administrator', '4141');
+      nodeMap.add(8);
+      const zone = (await agent.post('/api/v1/zones').send({ name: 'Z' })).body;
+      const sensor = (await agent.post(`/api/v1/zones/${zone.id}/sensors`).send({ zwaveNodeId: 8, name: 'Front', category: 'intrusion' })).body;
+
+      expect((await agent.post(`/api/v1/sensors/${sensor.id}/quick-exit`)).status).toBe(409);
+      expect((await agent.post('/api/v1/sensors/nope/quick-exit')).status).toBe(404);
+
+      const patched = await agent.patch(`/api/v1/sensors/${sensor.id}`).send({ quickEntrySupported: true });
+      expect(patched.body).toMatchObject({ quickExitEnabled: true, quickEntrySupported: true });
+
+      const started = await agent.post(`/api/v1/sensors/${sensor.id}/quick-exit`);
+      expect(started.status).toBe(200);
+      expect(started.body.sensorId).toBe(sensor.id);
+      expect(Date.parse(started.body.expiresAt)).toBeGreaterThan(Date.now());
+
+      const cleared = await agent.patch(`/api/v1/sensors/${sensor.id}`).send({ quickExitEnabled: false });
+      expect(cleared.body).toMatchObject({ quickExitEnabled: false, quickEntrySupported: false });
     });
 
     it('restricts discovery and sensor edits to administrators', async () => {

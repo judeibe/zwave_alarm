@@ -10,6 +10,9 @@ import type { ModeChanges, ModeConfig, ModeConfigRepository, ModeDelays } from '
 
 const logger = createLogger('alarm/panel');
 
+/** How long a sensor's door can be opened after its quick-exit button press without tripping the alarm. */
+export const QUICK_EXIT_WINDOW_MS = 5000;
+
 export type ArmMode = ArmedMode;
 
 /** Thrown when a command is requested from a panel mode that doesn't support it (e.g. arming while already armed). */
@@ -147,6 +150,8 @@ export class PanelService extends EventEmitter {
   private readonly modeConfig: ModeConfigRepository | undefined;
   private readonly commandContext = new WeakMap<AlarmCommandRequest, CommandContext>();
   private pendingTimer: NodeJS.Timeout | null = null;
+  /** Sensor id → end of its quick-exit window (epoch ms). */
+  private readonly quickExitUntil = new Map<string, number>();
 
   constructor(
     private readonly panelRepo: AlarmPanelRepository,
@@ -226,8 +231,33 @@ export class PanelService extends EventEmitter {
     return this.submit('disarm_zone', { ...options, zoneId });
   }
 
+  /** Opens (or restarts) a sensor's quick-exit window and returns when it ends. The caller checks the sensor allows it. */
+  startQuickExit(sensorId: string): number {
+    const until = Date.now() + QUICK_EXIT_WINDOW_MS;
+    this.quickExitUntil.set(sensorId, until);
+    logger.info('quick exit started', { sensorId });
+    return until;
+  }
+
+  private inQuickExit(sensorId: string): boolean {
+    const until = this.quickExitUntil.get(sensorId);
+    if (until === undefined) {
+      return false;
+    }
+    if (Date.now() >= until) {
+      this.quickExitUntil.delete(sensorId);
+      return false;
+    }
+    return true;
+  }
+
   /** Intrusion sensors are armed-state-gated (FR-003); life-safety sensors always trigger immediately (FR-015). */
   reportSensorBreach(sensor: SensorBreachInput): AlarmPanel {
+    // Quick exit only covers intrusion sensors; smoke/CO/flood and tamper always count.
+    if (sensor.category === 'intrusion' && this.inQuickExit(sensor.id)) {
+      logger.info('breach ignored: quick exit window', { sensorId: sensor.id });
+      return this.panelRepo.getPanel();
+    }
     const panel = this.evaluateBreach(sensor);
     // Lets listeners (the keypads' chirps) react to a trip with the panel state it led to.
     this.emit('sensor_tripped', sensor, panel);

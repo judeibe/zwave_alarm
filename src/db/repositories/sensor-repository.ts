@@ -68,7 +68,9 @@ export interface SensorDevice {
   entryway: string | null;
   /** True for sensors inside the home (motion, interior doors), false for the perimeter. */
   isInterior: boolean;
-  /** Whether the entryway's lock supports quick entry (a lock opened from this entry skips the entry delay). */
+  /** Quick exit: after the sensor's button is pressed, opening its door for QUICK_EXIT_WINDOW_MS does not trip the alarm. */
+  quickExitEnabled: boolean;
+  /** Old name of `quickExitEnabled`, returned so existing clients keep working. */
   quickEntrySupported: boolean;
   /** True from a tamper report (cover removed or moved) until the device reports the cover back. */
   tampered: boolean;
@@ -90,7 +92,7 @@ export interface CreateSensorInput {
   sensorKind?: SensorKind;
   entryway?: string | null;
   isInterior?: boolean;
-  quickEntrySupported?: boolean;
+  quickExitEnabled?: boolean;
 }
 
 /** The kind a sensor gets when the caller does not say: what its placement implies. */
@@ -128,7 +130,7 @@ interface SensorDeviceRow {
   sensor_kind: SensorKind;
   entryway: string | null;
   is_interior: number;
-  quick_entry_supported: number;
+  quick_exit_enabled: number;
   tampered: number;
   updated_at: number;
 }
@@ -154,7 +156,8 @@ function toDomain(row: SensorDeviceRow): SensorDevice {
     sensorKind: row.sensor_kind,
     entryway: row.entryway,
     isInterior: row.is_interior === 1,
-    quickEntrySupported: row.quick_entry_supported === 1,
+    quickExitEnabled: row.quick_exit_enabled === 1,
+    quickEntrySupported: row.quick_exit_enabled === 1,
     tampered: row.tampered === 1,
     updatedAt: row.updated_at,
   };
@@ -205,7 +208,8 @@ export class SensorRepository extends Repository {
       sensorKind,
       entryway: input.entryway ?? null,
       isInterior: input.isInterior ?? sensorKind === 'interior',
-      quickEntrySupported: input.quickEntrySupported ?? false,
+      quickExitEnabled: input.quickExitEnabled ?? false,
+      quickEntrySupported: input.quickExitEnabled ?? false,
       tampered: false,
       updatedAt: Date.now(),
     };
@@ -213,7 +217,7 @@ export class SensorRepository extends Repository {
       `INSERT INTO sensor_devices
          (id, zwave_node_id, zone_id, name, category, current_state, battery_level, connectivity_status,
           placement, armed_home, armed_away, alerts_only, alarm_kind, chirp_tone, chime_enabled, sensor_kind, entryway,
-          is_interior, quick_entry_supported, updated_at)
+          is_interior, quick_exit_enabled, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       sensor.id,
       sensor.zwaveNodeId,
@@ -233,7 +237,7 @@ export class SensorRepository extends Repository {
       sensor.sensorKind,
       sensor.entryway,
       sensor.isInterior ? 1 : 0,
-      sensor.quickEntrySupported ? 1 : 0,
+      sensor.quickExitEnabled ? 1 : 0,
       sensor.updatedAt,
     );
     return sensor;
@@ -273,7 +277,7 @@ export class SensorRepository extends Repository {
    */
   updateConfig(
     id: string,
-    changes: Partial<Pick<SensorDevice, 'name' | 'category' | 'zoneId' | 'placement' | 'armedHome' | 'armedAway' | 'alertsOnly' | 'alarmKind' | 'chirpTone' | 'chimeEnabled' | 'sensorKind' | 'entryway' | 'isInterior' | 'quickEntrySupported'>>,
+    changes: Partial<Pick<SensorDevice, 'name' | 'category' | 'zoneId' | 'placement' | 'armedHome' | 'armedAway' | 'alertsOnly' | 'alarmKind' | 'chirpTone' | 'chimeEnabled' | 'sensorKind' | 'entryway' | 'isInterior' | 'quickExitEnabled'>>,
   ): SensorDevice {
     const current = this.findById(id);
     if (!current) {
@@ -292,12 +296,13 @@ export class SensorRepository extends Repository {
       next.placement ??= defaultPlacement('intrusion');
     }
     next.chimeSound = next.chirpTone;
+    next.quickEntrySupported = next.quickExitEnabled;
     if (next.placement !== current.placement && changes.armedHome === undefined && changes.armedAway === undefined) {
       Object.assign(next, defaultArmed(next.placement));
     }
     this.run(
       `UPDATE sensor_devices
-       SET name = ?, category = ?, zone_id = ?, placement = ?, armed_home = ?, armed_away = ?, alerts_only = ?, alarm_kind = ?, chirp_tone = ?, chime_enabled = ?, sensor_kind = ?, entryway = ?, is_interior = ?, quick_entry_supported = ?, updated_at = ?
+       SET name = ?, category = ?, zone_id = ?, placement = ?, armed_home = ?, armed_away = ?, alerts_only = ?, alarm_kind = ?, chirp_tone = ?, chime_enabled = ?, sensor_kind = ?, entryway = ?, is_interior = ?, quick_exit_enabled = ?, updated_at = ?
        WHERE id = ?`,
       next.name,
       next.category,
@@ -312,7 +317,7 @@ export class SensorRepository extends Repository {
       next.sensorKind,
       next.entryway,
       next.isInterior ? 1 : 0,
-      next.quickEntrySupported ? 1 : 0,
+      next.quickExitEnabled ? 1 : 0,
       next.updatedAt,
       id,
     );
