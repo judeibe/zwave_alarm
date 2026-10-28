@@ -14,6 +14,10 @@ export type SensorPlacement = (typeof SENSOR_PLACEMENTS)[number];
 export const CHIRP_TONES = ['none', 'double_beep', 'guitar', 'wind_chimes', 'bing_bong', 'doorbell'] as const;
 export type ChirpTone = (typeof CHIRP_TONES)[number];
 
+export const SENSOR_KINDS = ['door', 'window', 'interior'] as const;
+/** What the sensor watches, as the user describes it; independent of `placement`, which decides the entry delay. */
+export type SensorKind = (typeof SENSOR_KINDS)[number];
+
 /** What a life-safety sensor raises when it trips. Intrusion sensors have none (they raise BURGLARY). */
 export type SensorAlarmKind = 'SMOKE' | 'CO' | 'FLOOD_FREEZE';
 
@@ -54,6 +58,18 @@ export interface SensorDevice {
   alarmKind: SensorAlarmKind | null;
   /** Chirp played on the keypads when the sensor trips and chirps are on for the mode; null for life-safety sensors. */
   chirpTone: ChirpTone | null;
+  /** Whether the sensor sounds a chime on the keypads when it trips. Off mutes it without forgetting the sound. */
+  chimeEnabled: boolean;
+  /** The chime this sensor plays; the same value as `chirpTone`, named for the client. Null for life-safety sensors. */
+  chimeSound: ChirpTone | null;
+  /** Door, window or interior, as the user describes it. */
+  sensorKind: SensorKind;
+  /** Which entryway the sensor belongs to (free text, e.g. "Front door"); null when unassigned. */
+  entryway: string | null;
+  /** True for sensors inside the home (motion, interior doors), false for the perimeter. */
+  isInterior: boolean;
+  /** Whether the entryway's lock supports quick entry (a lock opened from this entry skips the entry delay). */
+  quickEntrySupported: boolean;
   /** True from a tamper report (cover removed or moved) until the device reports the cover back. */
   tampered: boolean;
   updatedAt: number;
@@ -70,6 +86,22 @@ export interface CreateSensorInput {
   alertsOnly?: boolean;
   alarmKind?: SensorAlarmKind | null;
   chirpTone?: ChirpTone;
+  chimeEnabled?: boolean;
+  sensorKind?: SensorKind;
+  entryway?: string | null;
+  isInterior?: boolean;
+  quickEntrySupported?: boolean;
+}
+
+/** The kind a sensor gets when the caller does not say: what its placement implies. */
+export function defaultSensorKind(category: SensorCategory, placement: SensorPlacement | null): SensorKind {
+  if (category === 'life-safety') {
+    return 'interior';
+  }
+  if (placement === 'WINDOW' || placement === 'GLASS_BREAK') {
+    return 'window';
+  }
+  return placement === 'ROOM' || placement === 'ENTRYWAY' ? 'interior' : 'door';
 }
 
 /** Fault fields (connectivity/battery) and breach state are reported separately (FR-012) but both update through this. */
@@ -92,6 +124,11 @@ interface SensorDeviceRow {
   alerts_only: number;
   alarm_kind: SensorAlarmKind | null;
   chirp_tone: ChirpTone | null;
+  chime_enabled: number;
+  sensor_kind: SensorKind;
+  entryway: string | null;
+  is_interior: number;
+  quick_entry_supported: number;
   tampered: number;
   updated_at: number;
 }
@@ -112,6 +149,12 @@ function toDomain(row: SensorDeviceRow): SensorDevice {
     alertsOnly: row.alerts_only === 1,
     alarmKind: row.alarm_kind,
     chirpTone: row.chirp_tone,
+    chimeEnabled: row.chime_enabled === 1,
+    chimeSound: row.chirp_tone,
+    sensorKind: row.sensor_kind,
+    entryway: row.entryway,
+    isInterior: row.is_interior === 1,
+    quickEntrySupported: row.quick_entry_supported === 1,
     tampered: row.tampered === 1,
     updatedAt: row.updated_at,
   };
@@ -141,6 +184,7 @@ export class SensorRepository extends Repository {
 
     const placement = input.category === 'intrusion' ? (input.placement ?? defaultPlacement('intrusion')) : null;
     const armed = defaultArmed(placement);
+    const sensorKind = input.sensorKind ?? defaultSensorKind(input.category, placement);
     const sensor: SensorDevice = {
       id: randomUUID(),
       zwaveNodeId: input.zwaveNodeId,
@@ -156,14 +200,21 @@ export class SensorRepository extends Repository {
       alertsOnly: input.alertsOnly ?? false,
       alarmKind: input.category === 'life-safety' ? (input.alarmKind ?? 'SMOKE') : null,
       chirpTone: input.category === 'intrusion' ? (input.chirpTone ?? 'double_beep') : null,
+      chimeEnabled: input.category === 'intrusion' && (input.chimeEnabled ?? input.chirpTone !== 'none'),
+      chimeSound: input.category === 'intrusion' ? (input.chirpTone ?? 'double_beep') : null,
+      sensorKind,
+      entryway: input.entryway ?? null,
+      isInterior: input.isInterior ?? sensorKind === 'interior',
+      quickEntrySupported: input.quickEntrySupported ?? false,
       tampered: false,
       updatedAt: Date.now(),
     };
     this.run(
       `INSERT INTO sensor_devices
          (id, zwave_node_id, zone_id, name, category, current_state, battery_level, connectivity_status,
-          placement, armed_home, armed_away, alerts_only, alarm_kind, chirp_tone, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          placement, armed_home, armed_away, alerts_only, alarm_kind, chirp_tone, chime_enabled, sensor_kind, entryway,
+          is_interior, quick_entry_supported, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       sensor.id,
       sensor.zwaveNodeId,
       sensor.zoneId,
@@ -178,6 +229,11 @@ export class SensorRepository extends Repository {
       sensor.alertsOnly ? 1 : 0,
       sensor.alarmKind,
       sensor.chirpTone,
+      sensor.chimeEnabled ? 1 : 0,
+      sensor.sensorKind,
+      sensor.entryway,
+      sensor.isInterior ? 1 : 0,
+      sensor.quickEntrySupported ? 1 : 0,
       sensor.updatedAt,
     );
     return sensor;
@@ -217,7 +273,7 @@ export class SensorRepository extends Repository {
    */
   updateConfig(
     id: string,
-    changes: Partial<Pick<SensorDevice, 'name' | 'category' | 'zoneId' | 'placement' | 'armedHome' | 'armedAway' | 'alertsOnly' | 'alarmKind' | 'chirpTone'>>,
+    changes: Partial<Pick<SensorDevice, 'name' | 'category' | 'zoneId' | 'placement' | 'armedHome' | 'armedAway' | 'alertsOnly' | 'alarmKind' | 'chirpTone' | 'chimeEnabled' | 'sensorKind' | 'entryway' | 'isInterior' | 'quickEntrySupported'>>,
   ): SensorDevice {
     const current = this.findById(id);
     if (!current) {
@@ -229,17 +285,19 @@ export class SensorRepository extends Repository {
       next.alertsOnly = false;
       next.alarmKind ??= 'SMOKE';
       next.chirpTone = null;
+      next.chimeEnabled = false;
     } else {
       next.alarmKind = null;
       next.chirpTone ??= 'double_beep';
       next.placement ??= defaultPlacement('intrusion');
     }
+    next.chimeSound = next.chirpTone;
     if (next.placement !== current.placement && changes.armedHome === undefined && changes.armedAway === undefined) {
       Object.assign(next, defaultArmed(next.placement));
     }
     this.run(
       `UPDATE sensor_devices
-       SET name = ?, category = ?, zone_id = ?, placement = ?, armed_home = ?, armed_away = ?, alerts_only = ?, alarm_kind = ?, chirp_tone = ?, updated_at = ?
+       SET name = ?, category = ?, zone_id = ?, placement = ?, armed_home = ?, armed_away = ?, alerts_only = ?, alarm_kind = ?, chirp_tone = ?, chime_enabled = ?, sensor_kind = ?, entryway = ?, is_interior = ?, quick_entry_supported = ?, updated_at = ?
        WHERE id = ?`,
       next.name,
       next.category,
@@ -250,6 +308,11 @@ export class SensorRepository extends Repository {
       next.alertsOnly ? 1 : 0,
       next.alarmKind,
       next.chirpTone,
+      next.chimeEnabled ? 1 : 0,
+      next.sensorKind,
+      next.entryway,
+      next.isInterior ? 1 : 0,
+      next.quickEntrySupported ? 1 : 0,
       next.updatedAt,
       id,
     );

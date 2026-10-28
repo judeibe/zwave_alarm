@@ -27,7 +27,7 @@ describe('db schema', () => {
   it('records the applied migration and is idempotent on re-run', () => {
     const db = createDatabase(':memory:');
     const applied = db.prepare('SELECT id FROM schema_migrations').all();
-    expect(applied).toEqual([{ id: '001_init' }, { id: '002_panel_armed_mode' }, { id: '003_panel_disarmed_zones' }, { id: '004_config_panel' }, { id: '005_keypad_settings' }, { id: '006_enrolled_locks' }, { id: '007_placements_and_mode_config' }, { id: '008_panel_bypassed_devices' }, { id: '009_alarm_events' }, { id: '010_sirens_and_tamper' }, { id: '011_installer_role_and_duress_code' }, { id: '012_guest_schedules' }, { id: '013_history_fields' }, { id: '014_mode_schedules' }, { id: '015_lock_automation' }, { id: '016_keypad_chirps' }]);
+    expect(applied).toEqual([{ id: '001_init' }, { id: '002_panel_armed_mode' }, { id: '003_panel_disarmed_zones' }, { id: '004_config_panel' }, { id: '005_keypad_settings' }, { id: '006_enrolled_locks' }, { id: '007_placements_and_mode_config' }, { id: '008_panel_bypassed_devices' }, { id: '009_alarm_events' }, { id: '010_sirens_and_tamper' }, { id: '011_installer_role_and_duress_code' }, { id: '012_guest_schedules' }, { id: '013_history_fields' }, { id: '014_mode_schedules' }, { id: '015_lock_automation' }, { id: '016_keypad_chirps' }, { id: '017_per_sensor_entry_settings' }]);
 
     // Running again must not error (CREATE TABLE would fail if re-applied) or duplicate rows.
     expect(() => runMigrations(db)).not.toThrow();
@@ -47,7 +47,7 @@ describe('db schema', () => {
       { id: '013_history_fields' },
       { id: '014_mode_schedules' },
       { id: '015_lock_automation' },
-      { id: '016_keypad_chirps' },
+      { id: '016_keypad_chirps' }, { id: '017_per_sensor_entry_settings' },
     ]);
   });
 

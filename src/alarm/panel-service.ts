@@ -71,7 +71,7 @@ export interface PanelCommandOptions {
 }
 
 export type SensorBreachInput = Pick<SensorDevice, 'id' | 'zoneId' | 'category'> &
-  Partial<Pick<SensorDevice, 'placement' | 'armedHome' | 'armedAway' | 'alertsOnly' | 'alarmKind' | 'chirpTone'>>;
+  Partial<Pick<SensorDevice, 'placement' | 'armedHome' | 'armedAway' | 'alertsOnly' | 'alarmKind' | 'chirpTone' | 'chimeEnabled'>>;
 
 export interface TriggerAlarmContext {
   relatedZoneId?: string | null;

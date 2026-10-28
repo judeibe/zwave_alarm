@@ -312,7 +312,7 @@ this.panelService.raiseEmergency(
     const mode = panel.mode === 'disarmed' || panel.mode === 'armed_home' || panel.mode === 'armed_away' ? panel.mode : null;
     const tone = sensor.chirpTone;
     // Not during a delay or an alarm (the delay tones and the siren already speak), and not for a muted sensor.
-    if (mode === null || sensor.category !== 'intrusion' || !tone || tone === 'none') {
+    if (mode === null || sensor.category !== 'intrusion' || sensor.chimeEnabled === false || !tone || tone === 'none') {
       return;
     }
     if (!this.panelService.getModes()[mode].chirpsEnabled) {

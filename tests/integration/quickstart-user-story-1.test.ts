@@ -42,7 +42,13 @@ class MockNode {
   private readonly listeners: Record<string, (...args: never[]) => void> = {};
   setValue = vi.fn().mockResolvedValue({ status: SetValueStatus.Success });
 
-  constructor(public readonly id: number) {}
+  constructor(
+    public readonly id: number,
+    // Ring Contact Sensor Gen2 unless a test says otherwise: the alarm only accepts supported devices.
+    public readonly productType = 0x0201,
+    public readonly productId = 0x0301,
+    public readonly manufacturerId = 0x0346,
+  ) {}
 
   on(event: string, handler: (...args: never[]) => void): void {
     this.listeners[event] = handler;
@@ -97,7 +103,7 @@ function buildHarness() {
   // real installation follows -- zone-routes.ts validates an assigned
   // zwaveNodeId against driver.controller.nodes.get().
   const doorNode = new MockNode(10);
-  const smokeNode = new MockNode(20);
+  const smokeNode = new MockNode(20, 0x0601, 0x0101);
   const sirenNode = new MockNode(99);
   mockDriver.controller.nodes.add(doorNode);
   mockDriver.controller.nodes.add(smokeNode);
