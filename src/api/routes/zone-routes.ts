@@ -22,7 +22,7 @@ export interface ZoneRouteDeps {
   zoneRepo: ZoneRepository;
   sensorRepo: SensorRepository;
   /** Opens the quick-exit window for a sensor. */
-  panelService: Pick<PanelService, 'startQuickExit'>;
+  panelService: Pick<PanelService, 'startQuickExit' | 'quickExitBlockedReason'>;
   userRepo: UserRepository;
   /** Only `controller.nodes` is read (to validate a zwaveNodeId is known before assigning it). */
   driver: Pick<Driver, 'controller'>;
@@ -246,8 +246,12 @@ export function createZoneRouter({ zoneRepo, sensorRepo, panelService, userRepo,
     if (!sensor) {
       throw new ApiError(404, 'not_found', `Sensor ${req.params.sensorId} does not exist.`);
     }
-    if (sensor.category !== 'intrusion' || !sensor.quickExitEnabled) {
+    const blocked = panelService.quickExitBlockedReason(sensor);
+    if (blocked === 'disabled') {
       throw new ApiError(409, 'quick_exit_disabled', 'Quick exit is not enabled for this sensor.');
+    }
+    if (blocked) {
+      throw new ApiError(409, 'quick_exit_unavailable', blocked === 'not_armed_home' ? 'Quick exit works only while the panel is armed Home.' : 'The sensor must be closed, untampered and online.');
     }
     const expiresAt = panelService.startQuickExit(sensor.id);
     res.status(200).json({ sensorId: sensor.id, expiresAt: new Date(expiresAt).toISOString() });

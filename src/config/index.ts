@@ -21,6 +21,8 @@ export interface AppConfig {
   apiAuthRequired: boolean;
   /** Whether arming from a keypad needs a valid user code too. Disarming always does. */
   keypadRequireCodeToArm: boolean;
+  /** Start a sensor's quick-exit window on its System/Heartbeat notification (the button press). */
+  quickExitOnHeartbeat: boolean;
   /** Whether zwave-js may soft-reset the controller while starting. Turn off (ZWAVE_SOFT_RESET=false) for
    *  sticks that stop answering after the reset, as some do under USB passthrough (ZW0100). */
   zwaveSoftReset: boolean;
@@ -178,6 +180,7 @@ function loadConfig(): AppConfig {
     securityKeysLongRange: parseKeys(LONG_RANGE_KEY_ENV),
     apiAuthRequired: process.env.API_AUTH_REQUIRED?.toLowerCase() === 'true',
     keypadRequireCodeToArm: parseBoolean('KEYPAD_REQUIRE_CODE_TO_ARM'),
+    quickExitOnHeartbeat: parseBoolean('QUICK_EXIT_ON_HEARTBEAT'),
     // Unset falls back to zwave-js's own ZWAVEJS_DISABLE_SOFT_RESET switch, since passing an explicit
     // `softReset: true` to the Driver would otherwise override it.
     zwaveSoftReset: parseBoolean('ZWAVE_SOFT_RESET', !process.env.ZWAVEJS_DISABLE_SOFT_RESET),

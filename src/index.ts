@@ -77,7 +77,7 @@ const driver = getDriver();
 // reads controller.nodes immediately — has to wait for "driver ready"
 // rather than running right away. Siren only touches controller.nodes
 // lazily inside its panel_changed handler, so it's safe to construct now.
-const sensorMapper = new SensorMapper(driver, sensorRepo, panelService, eventRepo);
+const sensorMapper = new SensorMapper(driver, sensorRepo, panelService, eventRepo, { quickExitOnHeartbeat: config.quickExitOnHeartbeat });
 // `on`, not `once`: a driver restarted after a failure has new controller/node objects, so the
 // mapper and keypad gateway re-attach on every "driver ready" (the driver facade carries this
 // listener over to each replacement instance).

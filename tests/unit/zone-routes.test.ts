@@ -42,7 +42,7 @@ class MockDriver {
   controller = new MockController();
 }
 
-async function buildHarness(): Promise<{ app: Express; userRepo: UserRepository; nodeMap: MockNodeMap }> {
+async function buildHarness(): Promise<{ app: Express; userRepo: UserRepository; nodeMap: MockNodeMap; panelService: PanelService }> {
   const db = createDatabase(':memory:');
   const panelRepo = new AlarmPanelRepository(db);
   const eventRepo = new EventRepository(db);
@@ -50,7 +50,7 @@ async function buildHarness(): Promise<{ app: Express; userRepo: UserRepository;
   const sensorRepo = new SensorRepository(db);
   const userRepo = new UserRepository(db);
   const lockoutPolicyRepo = new LockoutPolicyRepository(db);
-  const panelService = new PanelService(panelRepo, eventRepo);
+  const panelService = new PanelService(panelRepo, eventRepo, { exitDelayMs: 1 });
   const lockoutService = new LockoutService(userRepo, lockoutPolicyRepo, eventRepo, panelService);
   const mockDriver = new MockDriver();
   const driver = mockDriver as unknown as Driver;
@@ -63,7 +63,7 @@ async function buildHarness(): Promise<{ app: Express; userRepo: UserRepository;
   const haLinkRepo = new HaLinkRepository(db);
   const app = createApp({ panelService, userRepo, zoneRepo, sensorRepo, lockoutService, eventRepo, haLinkRepo, driver });
 
-  return { app, userRepo, nodeMap: mockDriver.controller.nodes };
+  return { app, userRepo, nodeMap: mockDriver.controller.nodes, panelService };
 }
 
 async function loginAs(app: Express, userRepo: UserRepository, role: 'administrator' | 'member' | 'guest', code: string) {
@@ -355,7 +355,7 @@ describe('zone routes', () => {
     });
 
     it('opens a quick-exit window only for a sensor with quick exit enabled, and keeps the old field name working', async () => {
-      const { app, userRepo, nodeMap } = await buildHarness();
+      const { app, userRepo, nodeMap, panelService } = await buildHarness();
       const agent = await loginAs(app, userRepo, 'administrator', '4141');
       nodeMap.add(8);
       const zone = (await agent.post('/api/v1/zones').send({ name: 'Z' })).body;
@@ -366,6 +366,10 @@ describe('zone routes', () => {
 
       const patched = await agent.patch(`/api/v1/sensors/${sensor.id}`).send({ quickEntrySupported: true });
       expect(patched.body).toMatchObject({ quickExitEnabled: true, quickEntrySupported: true });
+
+      expect((await agent.post(`/api/v1/sensors/${sensor.id}/quick-exit`)).body.error.code).toBe('quick_exit_unavailable'); // panel disarmed
+      await panelService.arm('armed_home', { source: 'native' });
+      await new Promise((resolve) => setTimeout(resolve, 5));
 
       const started = await agent.post(`/api/v1/sensors/${sensor.id}/quick-exit`);
       expect(started.status).toBe(200);

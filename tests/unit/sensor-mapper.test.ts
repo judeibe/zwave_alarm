@@ -36,7 +36,7 @@ class MockDriver {
   controller = new MockController();
 }
 
-function buildMapper(options?: { lowBatteryThresholdPercent?: number }) {
+function buildMapper(options?: { lowBatteryThresholdPercent?: number; quickExitOnHeartbeat?: boolean }) {
   const db = createDatabase(':memory:');
   const panelRepo = new AlarmPanelRepository(db);
   const eventRepo = new EventRepository(db);
@@ -80,6 +80,98 @@ function attachAndStart(driver: MockDriver, mapper: SensorMapper, nodeIds: numbe
   mapper.start();
   return nodes;
 }
+
+const HEARTBEAT = { type: 9, label: 'System', event: 5, eventLabel: 'Heartbeat' };
+
+describe('SensorMapper System/Heartbeat (the sensor button)', () => {
+  async function armedHome(options: { quickExitOnHeartbeat: boolean }, quickExit = true) {
+    const built = buildMapper(options);
+    built.sensorRepo.updateConfig(built.intrusionSensor.id, { quickExitEnabled: quickExit });
+    built.sensorRepo.updateConfig(built.lifeSafetySensor.id, {});
+    const nodes = attachAndStart(built.driver, built.mapper, [10, 20]);
+    await built.panelService.arm('armed_home', { source: 'native' });
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(built.panelService.getState().mode).toBe('armed_home');
+    return { ...built, nodes };
+  }
+  const press = (nodes: Map<number, MockNode>, id = 10) => nodes.get(id)!.emit('notification', {}, CommandClasses.Notification, HEARTBEAT);
+  const breach = (sensorId: string, panelService: PanelService, sensorRepo: SensorRepository) =>
+    panelService.reportSensorBreach(sensorRepo.findById(sensorId)!).mode;
+
+  it('is never a breach, even with the trigger off', async () => {
+    const { nodes, sensorRepo, panelService } = await armedHome({ quickExitOnHeartbeat: false });
+    press(nodes);
+
+    expect(sensorRepo.findByNodeId(10)?.currentState).toBe('normal');
+    expect(panelService.getState().mode).toBe('armed_home');
+    expect(breach(sensorRepo.findByNodeId(10)!.id, panelService, sensorRepo)).toBe('alarm_pending'); // no window opened
+  });
+
+  it('opens the quick-exit window on an enabled sensor when the trigger is on', async () => {
+    const { nodes, sensorRepo, panelService } = await armedHome({ quickExitOnHeartbeat: true });
+    press(nodes);
+
+    expect(breach(sensorRepo.findByNodeId(10)!.id, panelService, sensorRepo)).toBe('armed_home');
+  });
+
+  it('ignores a sensor with quick exit disabled', async () => {
+    const { nodes, sensorRepo, panelService } = await armedHome({ quickExitOnHeartbeat: true }, false);
+    press(nodes);
+
+    expect(breach(sensorRepo.findByNodeId(10)!.id, panelService, sensorRepo)).toBe('alarm_pending');
+  });
+
+  it('ignores a life-safety sensor', async () => {
+    const { nodes, sensorRepo, panelService, lifeSafetySensor } = await armedHome({ quickExitOnHeartbeat: true });
+    press(nodes, 20);
+
+    expect(sensorRepo.findById(lifeSafetySensor.id)?.currentState).toBe('normal');
+    expect(breach(lifeSafetySensor.id, panelService, sensorRepo)).toBe('alarm_triggered');
+  });
+
+  it('restarts the window on a repeated press, and ends it 5000 ms after the last one', async () => {
+    const { nodes, sensorRepo, panelService } = await armedHome({ quickExitOnHeartbeat: true });
+    vi.useFakeTimers();
+    try {
+      const id = sensorRepo.findByNodeId(10)!.id;
+      press(nodes);
+      await vi.advanceTimersByTimeAsync(3000);
+      press(nodes);
+      await vi.advanceTimersByTimeAsync(4999); // 7999 ms after the first press, 4999 after the second
+      expect(breach(id, panelService, sensorRepo)).toBe('armed_home');
+      await vi.advanceTimersByTimeAsync(1); // exactly 5000 ms after the second
+      expect(breach(id, panelService, sensorRepo)).toBe('alarm_pending');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does nothing unless the panel is armed Home', async () => {
+    const built = buildMapper({ quickExitOnHeartbeat: true });
+    built.sensorRepo.updateConfig(built.intrusionSensor.id, { quickExitEnabled: true });
+    const nodes = attachAndStart(built.driver, built.mapper, [10]);
+    press(nodes); // disarmed
+    await built.panelService.arm('armed_away', { source: 'native' });
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    press(nodes); // armed away
+
+    expect(breach(built.intrusionSensor.id, built.panelService, built.sensorRepo)).toBe('alarm_pending');
+  });
+
+  it('ends the window when the door closes', async () => {
+    const { nodes, sensorRepo, panelService } = await armedHome({ quickExitOnHeartbeat: true });
+    const id = sensorRepo.findByNodeId(10)!.id;
+    const send = (event: number) => nodes.get(10)!.emit('notification', {}, CommandClasses.Notification, { type: 7, label: 'Home Security', event });
+    press(nodes);
+    send(2); // door opened inside the window: no alarm
+    expect(panelService.getState().mode).toBe('armed_home');
+    send(0); // door closed: armed again
+    send(2);
+
+    expect(panelService.getState().mode).toBe('alarm_pending');
+    expect(id).toBe(sensorRepo.findByNodeId(10)!.id);
+  });
+});
 
 describe('SensorMapper', () => {
   it('re-attaches to the new node objects when started again after the driver was restarted', async () => {

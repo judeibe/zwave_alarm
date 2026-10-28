@@ -138,6 +138,7 @@ describe('config loader', () => {
       securityKeysLongRange: {},
       apiAuthRequired: false,
       keypadRequireCodeToArm: false,
+      quickExitOnHeartbeat: false,
       zwaveSoftReset: true,
     });
   });
