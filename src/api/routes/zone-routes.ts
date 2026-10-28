@@ -13,6 +13,7 @@ import {
 } from '../validation.js';
 import { requireAuth, requireRole } from '../../auth/authorize.js';
 import type { UserRepository } from '../../auth/user-repository.js';
+import type { PanelService } from '../../alarm/panel-service.js';
 import type { ZoneRepository } from '../../db/repositories/zone-repository.js';
 import type { ChirpTone, SensorAlarmKind, SensorCategory, SensorKind, SensorPlacement, SensorRepository } from '../../db/repositories/sensor-repository.js';
 import { identifySupportedDevice, SUPPORTED_DEVICES, type SupportedDevice } from '../../zwave/supported-devices.js';
@@ -20,6 +21,8 @@ import { identifySupportedDevice, SUPPORTED_DEVICES, type SupportedDevice } from
 export interface ZoneRouteDeps {
   zoneRepo: ZoneRepository;
   sensorRepo: SensorRepository;
+  /** Opens the quick-exit window for a sensor. */
+  panelService: Pick<PanelService, 'startQuickExit'>;
   userRepo: UserRepository;
   /** Only `controller.nodes` is read (to validate a zwaveNodeId is known before assigning it). */
   driver: Pick<Driver, 'controller'>;
@@ -53,14 +56,17 @@ interface AssignSensorBody {
   sensorKind?: SensorKind;
   entryway?: string | null;
   isInterior?: boolean;
+  quickExitEnabled?: boolean;
+  /** Old name of quickExitEnabled. */
   quickEntrySupported?: boolean;
 }
 
 /** The per-sensor entry fields a client may set, mapped onto the repository (`chimeSound` is stored as `chirpTone`). */
-function entryChanges(body: Pick<AssignSensorBody, 'chimeEnabled' | 'chimeSound' | 'chirpTone' | 'sensorKind' | 'entryway' | 'isInterior' | 'quickEntrySupported'>) {
-  const { chimeSound, chirpTone, ...rest } = body;
+function entryChanges(body: Pick<AssignSensorBody, 'chimeEnabled' | 'chimeSound' | 'chirpTone' | 'sensorKind' | 'entryway' | 'isInterior' | 'quickExitEnabled' | 'quickEntrySupported'>) {
+  const { chimeSound, chirpTone, quickEntrySupported, quickExitEnabled, ...rest } = body;
   const tone = chimeSound ?? chirpTone;
-  return { ...rest, ...(tone !== undefined && { chirpTone: tone }) };
+  const quickExit = quickExitEnabled ?? quickEntrySupported;
+  return { ...rest, ...(tone !== undefined && { chirpTone: tone }), ...(quickExit !== undefined && { quickExitEnabled: quickExit }) };
 }
 
 /**
@@ -76,7 +82,7 @@ function entryChanges(body: Pick<AssignSensorBody, 'chimeEnabled' | 'chimeSound'
  * errors (FK violation / duplicate-node rejection respectively) and are
  * mapped to 404/409 here rather than a generic 500.
  */
-export function createZoneRouter({ zoneRepo, sensorRepo, userRepo, driver }: ZoneRouteDeps): Router {
+export function createZoneRouter({ zoneRepo, sensorRepo, panelService, userRepo, driver }: ZoneRouteDeps): Router {
   const router = Router();
 
   router.get('/zones', requireAuth, requireRole('administrator', 'member', 'installer'), (_req, res) => {
@@ -197,11 +203,16 @@ export function createZoneRouter({ zoneRepo, sensorRepo, userRepo, driver }: Zon
         sensorKind?: SensorKind;
         entryway?: string | null;
         isInterior?: boolean;
+        quickExitEnabled?: boolean;
         quickEntrySupported?: boolean;
         armed?: { home?: boolean; away?: boolean };
       };
       if (chimeSound !== undefined) {
         rest.chirpTone = chimeSound;
+      }
+      if (rest.quickEntrySupported !== undefined) {
+        rest.quickExitEnabled ??= rest.quickEntrySupported;
+        delete rest.quickEntrySupported;
       }
       const existing = sensorRepo.findById(req.params.sensorId);
       if (!existing) {
@@ -227,6 +238,20 @@ export function createZoneRouter({ zoneRepo, sensorRepo, userRepo, driver }: Zon
       res.status(200).json(sensorRepo.updateConfig(req.params.sensorId, changes));
     },
   );
+
+  // Quick exit: the sensor's button was pressed (by HA, or by the sensor itself once it reports one). For the next
+  // few seconds this sensor's door can be opened without tripping the alarm. Not for guests.
+  router.post('/sensors/:sensorId/quick-exit', requireAuth, requireRole('administrator', 'member', 'installer'), (req, res) => {
+    const sensor = sensorRepo.findById(req.params.sensorId);
+    if (!sensor) {
+      throw new ApiError(404, 'not_found', `Sensor ${req.params.sensorId} does not exist.`);
+    }
+    if (sensor.category !== 'intrusion' || !sensor.quickExitEnabled) {
+      throw new ApiError(409, 'quick_exit_disabled', 'Quick exit is not enabled for this sensor.');
+    }
+    const expiresAt = panelService.startQuickExit(sensor.id);
+    res.status(200).json({ sensorId: sensor.id, expiresAt: new Date(expiresAt).toISOString() });
+  });
 
   router.delete('/sensors/:sensorId', requireAuth, requireRole('administrator', 'installer'), (req, res) => {
     if (!sensorRepo.findById(req.params.sensorId)) {

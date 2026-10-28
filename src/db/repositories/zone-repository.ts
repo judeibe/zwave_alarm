@@ -39,7 +39,7 @@ interface ZoneSensorRow {
   sensor_kind: SensorKind | null;
   sensor_entryway: string | null;
   sensor_is_interior: number | null;
-  sensor_quick_entry_supported: number | null;
+  sensor_quick_exit_enabled: number | null;
   sensor_tampered: number | null;
   sensor_updated_at: number | null;
 }
@@ -65,7 +65,8 @@ function toSensor(row: ZoneSensorRow): ZoneSensor {
     sensorKind: row.sensor_kind as SensorKind,
     entryway: row.sensor_entryway,
     isInterior: row.sensor_is_interior === 1,
-    quickEntrySupported: row.sensor_quick_entry_supported === 1,
+    quickExitEnabled: row.sensor_quick_exit_enabled === 1,
+    quickEntrySupported: row.sensor_quick_exit_enabled === 1,
     tampered: row.sensor_tampered === 1,
     updatedAt: row.sensor_updated_at as number,
   };
@@ -119,7 +120,7 @@ export class ZoneRepository extends Repository {
          s.name AS sensor_name, s.category AS sensor_category, s.current_state AS sensor_current_state,
          s.battery_level AS sensor_battery_level, s.connectivity_status AS sensor_connectivity_status,
          s.placement AS sensor_placement, s.armed_home AS sensor_armed_home, s.armed_away AS sensor_armed_away,
-         s.alerts_only AS sensor_alerts_only, s.alarm_kind AS sensor_alarm_kind, s.chirp_tone AS sensor_chirp_tone, s.chime_enabled AS sensor_chime_enabled, s.sensor_kind AS sensor_kind, s.entryway AS sensor_entryway, s.is_interior AS sensor_is_interior, s.quick_entry_supported AS sensor_quick_entry_supported, s.tampered AS sensor_tampered, s.updated_at AS sensor_updated_at
+         s.alerts_only AS sensor_alerts_only, s.alarm_kind AS sensor_alarm_kind, s.chirp_tone AS sensor_chirp_tone, s.chime_enabled AS sensor_chime_enabled, s.sensor_kind AS sensor_kind, s.entryway AS sensor_entryway, s.is_interior AS sensor_is_interior, s.quick_exit_enabled AS sensor_quick_exit_enabled, s.tampered AS sensor_tampered, s.updated_at AS sensor_updated_at
        FROM zones z
        LEFT JOIN sensor_devices s ON s.zone_id = z.id
        ORDER BY z.created_at ASC, s.updated_at ASC`,
