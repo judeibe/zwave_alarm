@@ -8,7 +8,7 @@ import {
 } from '../alarm/siren-repository.js';
 import { MAX_EVENT_PAGE, SECURITY_EVENT_TYPES } from '../events/event-repository.js';
 import { isValidTimeZone, WEEKDAYS } from '../auth/guest-schedule.js';
-import { CHIRP_TONES, SENSOR_PLACEMENTS } from '../db/repositories/sensor-repository.js';
+import { CHIRP_TONES, SENSOR_KINDS, SENSOR_PLACEMENTS } from '../db/repositories/sensor-repository.js';
 import { MODE_DELAY_MAX_SEC, MODE_DELAY_MIN_SEC } from '../db/repositories/mode-config-repository.js';
 
 // Upper bounds keep a hostile body from feeding an unbounded string to scrypt/SQLite.
@@ -63,6 +63,17 @@ export const updateZoneBodySchema = z
 const placement = z.enum(SENSOR_PLACEMENTS);
 const alarmKind = z.enum(['SMOKE', 'CO', 'FLOOD_FREEZE']);
 const chirpTone = z.enum(CHIRP_TONES);
+const sensorKind = z.enum(SENSOR_KINDS);
+const entryway = z.string().trim().min(1).max(60).nullable();
+/** The per-sensor entry settings (chime, quick entry, kind, entryway); `chimeSound` is the client's name for `chirpTone`. */
+const entrySettings = {
+  chimeEnabled: z.boolean(),
+  chimeSound: chirpTone,
+  sensorKind,
+  entryway,
+  isInterior: z.boolean(),
+  quickEntrySupported: z.boolean(),
+};
 const armedFlags = z.object({ home: z.boolean(), away: z.boolean() }).partial().refine(nonEmpty, NON_EMPTY_MESSAGE);
 
 /**
@@ -70,7 +81,7 @@ const armedFlags = z.object({ home: z.boolean(), away: z.boolean() }).partial().
  * intrusion sensors only (the route rejects it for life-safety).
  */
 export const updateSensorBodySchema = z
-  .object({ name, category: z.enum(['intrusion', 'life-safety']), zoneId: z.string().min(1), placement, armed: armedFlags, alertsOnly: z.boolean(), alarmKind, chirpTone })
+  .object({ name, category: z.enum(['intrusion', 'life-safety']), zoneId: z.string().min(1), placement, armed: armedFlags, alertsOnly: z.boolean(), alarmKind, chirpTone, ...entrySettings })
   .partial()
   .refine(nonEmpty, NON_EMPTY_MESSAGE);
 
@@ -84,6 +95,12 @@ export const assignSensorBodySchema = z.object({
   alertsOnly: z.boolean().optional(),
   alarmKind: alarmKind.optional(),
   chirpTone: chirpTone.optional(),
+  chimeEnabled: entrySettings.chimeEnabled.optional(),
+  chimeSound: entrySettings.chimeSound.optional(),
+  sensorKind: sensorKind.optional(),
+  entryway: entryway.optional(),
+  isInterior: entrySettings.isInterior.optional(),
+  quickEntrySupported: entrySettings.quickEntrySupported.optional(),
 });
 
 /**

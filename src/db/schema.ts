@@ -374,6 +374,23 @@ const MIGRATIONS: Migration[] = [
       ALTER TABLE keypad_settings ADD COLUMN volume INTEGER CHECK (volume BETWEEN 0 AND 99);
     `,
   },
+  {
+    // One entry per sensor (supported devices only; the allowlist is enforced at assignment, so rows that
+    // predate it are kept). Chime on/off is separate from the chime sound so muting does not forget the sound;
+    // a sensor whose tone was 'none' becomes chime off. The kind is back-filled from the placement.
+    id: '017_per_sensor_entry_settings',
+    sql: `
+      ALTER TABLE sensor_devices ADD COLUMN chime_enabled INTEGER NOT NULL DEFAULT 0 CHECK (chime_enabled IN (0, 1));
+      ALTER TABLE sensor_devices ADD COLUMN sensor_kind TEXT NOT NULL DEFAULT 'door' CHECK (sensor_kind IN ('door', 'window', 'interior'));
+      ALTER TABLE sensor_devices ADD COLUMN entryway TEXT;
+      ALTER TABLE sensor_devices ADD COLUMN is_interior INTEGER NOT NULL DEFAULT 0 CHECK (is_interior IN (0, 1));
+      ALTER TABLE sensor_devices ADD COLUMN quick_entry_supported INTEGER NOT NULL DEFAULT 0 CHECK (quick_entry_supported IN (0, 1));
+      UPDATE sensor_devices SET chime_enabled = 1 WHERE category = 'intrusion' AND chirp_tone IS NOT NULL AND chirp_tone <> 'none';
+      UPDATE sensor_devices SET sensor_kind = 'window' WHERE placement IN ('WINDOW', 'GLASS_BREAK');
+      UPDATE sensor_devices SET sensor_kind = 'interior', is_interior = 1
+        WHERE category = 'life-safety' OR placement IN ('ROOM', 'ENTRYWAY');
+    `,
+  },
 ];
 
 function ensureMigrationsTable(db: Database.Database): void {

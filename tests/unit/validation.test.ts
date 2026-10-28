@@ -23,7 +23,7 @@ function setEnv() {
 }
 
 class MockDriver {
-  controller = { nodes: new Map<number, object>([[10, {}]]) };
+  controller = { nodes: new Map<number, object>([[10, { manufacturerId: 0x0346, productType: 0x0201, productId: 0x0301 }]]) };
 }
 
 async function buildHarness(): Promise<{ app: Express; userRepo: UserRepository; zoneRepo: ZoneRepository }> {

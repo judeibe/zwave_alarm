@@ -1,7 +1,7 @@
 import type Database from 'better-sqlite3';
 import { randomUUID } from 'node:crypto';
 import { Repository } from '../repository.js';
-import type { ChirpTone, ConnectivityStatus, SensorAlarmKind, SensorCategory, SensorDevice, SensorPlacement, SensorState } from './sensor-repository.js';
+import type { ChirpTone, ConnectivityStatus, SensorAlarmKind, SensorCategory, SensorDevice, SensorKind, SensorPlacement, SensorState } from './sensor-repository.js';
 
 export type { ConnectivityStatus, SensorCategory, SensorState };
 
@@ -35,6 +35,11 @@ interface ZoneSensorRow {
   sensor_alerts_only: number | null;
   sensor_alarm_kind: SensorAlarmKind | null;
   sensor_chirp_tone: ChirpTone | null;
+  sensor_chime_enabled: number | null;
+  sensor_kind: SensorKind | null;
+  sensor_entryway: string | null;
+  sensor_is_interior: number | null;
+  sensor_quick_entry_supported: number | null;
   sensor_tampered: number | null;
   sensor_updated_at: number | null;
 }
@@ -55,6 +60,12 @@ function toSensor(row: ZoneSensorRow): ZoneSensor {
     alertsOnly: row.sensor_alerts_only === 1,
     alarmKind: row.sensor_alarm_kind,
     chirpTone: row.sensor_chirp_tone,
+    chimeEnabled: row.sensor_chime_enabled === 1,
+    chimeSound: row.sensor_chirp_tone,
+    sensorKind: row.sensor_kind as SensorKind,
+    entryway: row.sensor_entryway,
+    isInterior: row.sensor_is_interior === 1,
+    quickEntrySupported: row.sensor_quick_entry_supported === 1,
     tampered: row.sensor_tampered === 1,
     updatedAt: row.sensor_updated_at as number,
   };
@@ -108,7 +119,7 @@ export class ZoneRepository extends Repository {
          s.name AS sensor_name, s.category AS sensor_category, s.current_state AS sensor_current_state,
          s.battery_level AS sensor_battery_level, s.connectivity_status AS sensor_connectivity_status,
          s.placement AS sensor_placement, s.armed_home AS sensor_armed_home, s.armed_away AS sensor_armed_away,
-         s.alerts_only AS sensor_alerts_only, s.alarm_kind AS sensor_alarm_kind, s.chirp_tone AS sensor_chirp_tone, s.tampered AS sensor_tampered, s.updated_at AS sensor_updated_at
+         s.alerts_only AS sensor_alerts_only, s.alarm_kind AS sensor_alarm_kind, s.chirp_tone AS sensor_chirp_tone, s.chime_enabled AS sensor_chime_enabled, s.sensor_kind AS sensor_kind, s.entryway AS sensor_entryway, s.is_interior AS sensor_is_interior, s.quick_entry_supported AS sensor_quick_entry_supported, s.tampered AS sensor_tampered, s.updated_at AS sensor_updated_at
        FROM zones z
        LEFT JOIN sensor_devices s ON s.zone_id = z.id
        ORDER BY z.created_at ASC, s.updated_at ASC`,

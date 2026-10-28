@@ -25,7 +25,8 @@ function setEnv() {
 class MockNodeMap {
   private readonly byId = new Map<number, object>();
   add(id: number, extra: object = {}): void {
-    this.byId.set(id, { nodeId: id, status: 4, ...extra });
+    // Ring Contact Sensor Gen2 by default: the alarm only accepts supported devices.
+    this.byId.set(id, { nodeId: id, status: 4, manufacturerId: 0x0346, productType: 0x0201, productId: 0x0301, ...extra });
   }
   get(id: number): object | undefined {
     return this.byId.get(id);
@@ -292,19 +293,65 @@ describe('zone routes', () => {
       const { app, userRepo, nodeMap } = await buildHarness();
       const agent = await loginAs(app, userRepo, 'administrator', '4141');
       nodeMap.add(1, { isControllerNode: true });
-      nodeMap.add(2, { name: 'Door', deviceConfig: { manufacturer: 'Aeotec', label: 'Door Sensor' } });
+      nodeMap.add(2, { name: 'Door', deviceConfig: { manufacturer: 'Ring', label: 'Contact Sensor Gen2' } });
+      nodeMap.add(5, { manufacturerId: 0x0086, productType: 0x0002, productId: 0x0059 }); // not a Ring-supported device
       nodeMap.add(3, { status: 3 });
       const zone = (await agent.post('/api/v1/zones').send({ name: 'Z' })).body;
       await agent.post(`/api/v1/zones/${zone.id}/sensors`).send({ zwaveNodeId: 3, name: 'S', category: 'intrusion' });
-      nodeMap.add(4, { status: 1 });
+      nodeMap.add(4, { status: 1, manufacturerId: 0x0346, productType: 0x0301, productId: 0x0301 });
 
       const res = await agent.get('/api/v1/sensors/discoverable');
 
       expect(res.status).toBe(200);
       expect(res.body).toEqual([
-        { zwaveNodeId: 2, name: 'Door', manufacturer: 'Aeotec', product: 'Door Sensor', suggestedCategory: null, status: 'alive' },
-        { zwaveNodeId: 4, name: null, manufacturer: null, product: null, suggestedCategory: null, status: 'asleep' },
+        { zwaveNodeId: 2, name: 'Door', manufacturer: 'Ring', product: 'Contact Sensor Gen2', suggestedCategory: 'intrusion', brand: 'Ring', model: 'Ring Alarm Contact Sensor (2nd gen)', deviceType: 'contact', suggestedSensorKind: 'door', status: 'alive' },
+        { zwaveNodeId: 4, name: null, manufacturer: null, product: null, suggestedCategory: 'intrusion', brand: 'Ring', model: 'Ring Alarm Motion Detector (2nd gen)', deviceType: 'motion', suggestedSensorKind: 'interior', status: 'asleep' },
       ]);
+    });
+
+    it('rejects a node that is not a Ring-supported sensor, or whose category does not match', async () => {
+      const { app, userRepo, nodeMap } = await buildHarness();
+      const agent = await loginAs(app, userRepo, 'administrator', '4141');
+      nodeMap.add(5, { manufacturerId: 0x0086, productType: 0x0002, productId: 0x0059 });
+      nodeMap.add(6, { manufacturerId: 0x0346, productType: 0x0401, productId: 0x0301 }); // range extender
+      nodeMap.add(2);
+      const zone = (await agent.post('/api/v1/zones').send({ name: 'Z' })).body;
+
+      const other = await agent.post(`/api/v1/zones/${zone.id}/sensors`).send({ zwaveNodeId: 5, name: 'X', category: 'intrusion' });
+      const extender = await agent.post(`/api/v1/zones/${zone.id}/sensors`).send({ zwaveNodeId: 6, name: 'R', category: 'intrusion' });
+      const wrong = await agent.post(`/api/v1/zones/${zone.id}/sensors`).send({ zwaveNodeId: 2, name: 'C', category: 'life-safety' });
+
+      expect(other.status).toBe(422);
+      expect(other.body.error.code).toBe('unsupported_device');
+      expect(extender.body.error.code).toBe('unsupported_device');
+      expect(wrong.body.error.code).toBe('category_mismatch');
+    });
+
+    it('lists the supported-device catalog', async () => {
+      const { app, userRepo } = await buildHarness();
+      const agent = await loginAs(app, userRepo, 'member', '5151');
+
+      const res = await agent.get('/api/v1/sensors/supported-devices');
+
+      expect(res.status).toBe(200);
+      expect(res.body).toContainEqual(expect.objectContaining({ brand: 'Ring', manufacturerId: 0x0346, productType: 0x0201, productId: 0x0301, deviceType: 'contact' }));
+    });
+
+    it('stores per-sensor entry settings and maps chimeSound onto the chirp tone', async () => {
+      const { app, userRepo, nodeMap } = await buildHarness();
+      const agent = await loginAs(app, userRepo, 'administrator', '4141');
+      nodeMap.add(7);
+      const zone = (await agent.post('/api/v1/zones').send({ name: 'Z' })).body;
+      const created = await agent.post(`/api/v1/zones/${zone.id}/sensors`).send({ zwaveNodeId: 7, name: 'Front', category: 'intrusion', entryway: 'Front door', chimeEnabled: true, chimeSound: 'doorbell' });
+      expect(created.status).toBe(201);
+      expect(created.body).toMatchObject({ sensorKind: 'door', entryway: 'Front door', chimeEnabled: true, chimeSound: 'doorbell', chirpTone: 'doorbell', isInterior: false, quickEntrySupported: false });
+
+      const patched = await agent.patch(`/api/v1/sensors/${created.body.id}`).send({ chimeEnabled: false, quickEntrySupported: true, sensorKind: 'window', isInterior: true, entryway: null });
+
+      expect(patched.status).toBe(200);
+      expect(patched.body).toMatchObject({ chimeEnabled: false, chimeSound: 'doorbell', quickEntrySupported: true, sensorKind: 'window', isInterior: true, entryway: null });
+      expect((await agent.get(`/api/v1/sensors/${created.body.id}`)).body).toMatchObject({ quickEntrySupported: true });
+      expect((await agent.get('/api/v1/sensors')).body).toHaveLength(1);
     });
 
     it('restricts discovery and sensor edits to administrators', async () => {

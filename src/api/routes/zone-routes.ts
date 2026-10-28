@@ -14,7 +14,8 @@ import {
 import { requireAuth, requireRole } from '../../auth/authorize.js';
 import type { UserRepository } from '../../auth/user-repository.js';
 import type { ZoneRepository } from '../../db/repositories/zone-repository.js';
-import type { ChirpTone, SensorAlarmKind, SensorCategory, SensorPlacement, SensorRepository } from '../../db/repositories/sensor-repository.js';
+import type { ChirpTone, SensorAlarmKind, SensorCategory, SensorKind, SensorPlacement, SensorRepository } from '../../db/repositories/sensor-repository.js';
+import { identifySupportedDevice, SUPPORTED_DEVICES, type SupportedDevice } from '../../zwave/supported-devices.js';
 
 export interface ZoneRouteDeps {
   zoneRepo: ZoneRepository;
@@ -30,6 +31,11 @@ interface DiscoverableNode {
   manufacturer: string | null;
   product: string | null;
   suggestedCategory: SensorCategory | null;
+  /** The catalog entry that made the node eligible; discovery lists supported devices only. */
+  brand: SupportedDevice['brand'];
+  model: string;
+  deviceType: SupportedDevice['deviceType'];
+  suggestedSensorKind: SensorKind;
   status: 'alive' | 'dead' | 'asleep';
 }
 
@@ -42,6 +48,19 @@ interface AssignSensorBody {
   alertsOnly?: boolean;
   alarmKind?: SensorAlarmKind;
   chirpTone?: ChirpTone;
+  chimeEnabled?: boolean;
+  chimeSound?: ChirpTone;
+  sensorKind?: SensorKind;
+  entryway?: string | null;
+  isInterior?: boolean;
+  quickEntrySupported?: boolean;
+}
+
+/** The per-sensor entry fields a client may set, mapped onto the repository (`chimeSound` is stored as `chirpTone`). */
+function entryChanges(body: Pick<AssignSensorBody, 'chimeEnabled' | 'chimeSound' | 'chirpTone' | 'sensorKind' | 'entryway' | 'isInterior' | 'quickEntrySupported'>) {
+  const { chimeSound, chirpTone, ...rest } = body;
+  const tone = chimeSound ?? chirpTone;
+  return { ...rest, ...(tone !== undefined && { chirpTone: tone }) };
 }
 
 /**
@@ -120,13 +139,20 @@ export function createZoneRouter({ zoneRepo, sensorRepo, userRepo, driver }: Zon
     try {
       nodes = [...driver.controller.nodes.values()]
         .filter((node) => !node.isControllerNode && sensorRepo.findByNodeId(node.nodeId) === undefined)
-        .map((node) => ({
+        .flatMap((node) => {
+          const device = identifySupportedDevice(node);
+          return device?.category ? [{ node, device }] : [];
+        })
+        .map(({ node, device }) => ({
           zwaveNodeId: node.nodeId,
           name: node.name ?? null,
           manufacturer: node.deviceConfig?.manufacturer ?? null,
           product: node.deviceConfig?.label ?? null,
-          // Reserved: no reliable signal from zwave-js yet, so the admin always picks the category.
-          suggestedCategory: null,
+          suggestedCategory: device.category,
+          brand: device.brand,
+          model: device.model,
+          deviceType: device.deviceType,
+          suggestedSensorKind: device.suggestedSensorKind,
           status: node.status === NodeStatus.Dead ? 'dead' : node.status === NodeStatus.Asleep ? 'asleep' : 'alive',
         }));
     } catch {
@@ -135,13 +161,30 @@ export function createZoneRouter({ zoneRepo, sensorRepo, userRepo, driver }: Zon
     res.status(200).json(nodes);
   });
 
+  // The allowlist itself, so a client can show what the alarm accepts without a node to test it against.
+  router.get('/sensors/supported-devices', requireAuth, requireRole('administrator', 'member', 'installer'), (_req, res) => {
+    res.status(200).json(SUPPORTED_DEVICES);
+  });
+
+  router.get('/sensors', requireAuth, requireRole('administrator', 'member', 'installer'), (_req, res) => {
+    res.status(200).json(sensorRepo.list());
+  });
+
+  router.get('/sensors/:sensorId', requireAuth, requireRole('administrator', 'member', 'installer'), (req, res) => {
+    const sensor = sensorRepo.findById(req.params.sensorId);
+    if (!sensor) {
+      throw new ApiError(404, 'not_found', `Sensor ${req.params.sensorId} does not exist.`);
+    }
+    res.status(200).json(sensor);
+  });
+
   router.patch(
     '/sensors/:sensorId',
     requireAuth,
     requireRole('administrator'),
     validateBody(updateSensorBodySchema),
     (req, res) => {
-      const { armed, ...rest } = req.body as {
+      const { armed, chimeSound, ...rest } = req.body as {
         name?: string;
         category?: SensorCategory;
         zoneId?: string;
@@ -149,8 +192,17 @@ export function createZoneRouter({ zoneRepo, sensorRepo, userRepo, driver }: Zon
         alertsOnly?: boolean;
         alarmKind?: SensorAlarmKind;
         chirpTone?: ChirpTone;
+        chimeEnabled?: boolean;
+        chimeSound?: ChirpTone;
+        sensorKind?: SensorKind;
+        entryway?: string | null;
+        isInterior?: boolean;
+        quickEntrySupported?: boolean;
         armed?: { home?: boolean; away?: boolean };
       };
+      if (chimeSound !== undefined) {
+        rest.chirpTone = chimeSound;
+      }
       const existing = sensorRepo.findById(req.params.sensorId);
       if (!existing) {
         throw new ApiError(404, 'not_found', `Sensor ${req.params.sensorId} does not exist.`);
@@ -161,8 +213,8 @@ export function createZoneRouter({ zoneRepo, sensorRepo, userRepo, driver }: Zon
       if (rest.alarmKind !== undefined && (rest.category ?? existing.category) !== 'life-safety') {
         throw new ApiError(400, 'bad_request', 'Only life-safety sensors have an alarmKind.');
       }
-      if (rest.chirpTone !== undefined && (rest.category ?? existing.category) === 'life-safety') {
-        throw new ApiError(400, 'bad_request', 'Life-safety sensors do not chirp.');
+      if ((rest.chirpTone !== undefined || rest.chimeEnabled !== undefined) && (rest.category ?? existing.category) === 'life-safety') {
+        throw new ApiError(400, 'bad_request', 'Life-safety sensors do not chime.');
       }
       const changes = {
         ...rest,
@@ -190,19 +242,30 @@ export function createZoneRouter({ zoneRepo, sensorRepo, userRepo, driver }: Zon
     requireRole('administrator', 'installer'),
     validateBody(assignSensorBodySchema),
     (req, res) => {
-      const { zwaveNodeId, name, category, placement, armed, alertsOnly, alarmKind, chirpTone } = req.body as AssignSensorBody;
+      const body = req.body as AssignSensorBody;
+      const { zwaveNodeId, name, category, placement, armed, alertsOnly, alarmKind } = body;
 
       let nodeIsKnown: boolean;
+      let device: SupportedDevice | undefined;
       try {
         // `driver.controller` throws until the zwave-js driver finishes
         // starting (src/index.ts defers SensorMapper.start() for the same
         // reason) — treat that as "can't validate yet" rather than a generic 500.
-        nodeIsKnown = driver.controller.nodes.get(zwaveNodeId) !== undefined;
+        const node = driver.controller.nodes.get(zwaveNodeId);
+        nodeIsKnown = node !== undefined;
+        device = node && identifySupportedDevice(node);
       } catch {
         throw new ApiError(503, 'unavailable', 'The zwave-js driver is not ready yet; try again shortly.');
       }
       if (!nodeIsKnown) {
         throw new ApiError(400, 'bad_request', `zwave-js node ${zwaveNodeId} is not known to the driver.`);
+      }
+
+      if (!device?.category) {
+        throw new ApiError(422, 'unsupported_device', `Node ${zwaveNodeId} is not a device Ring supports as a sensor.`);
+      }
+      if (device.category !== category) {
+        throw new ApiError(422, 'category_mismatch', `${device.model} is a ${device.category} sensor.`);
       }
 
       try {
@@ -215,8 +278,9 @@ export function createZoneRouter({ zoneRepo, sensorRepo, userRepo, driver }: Zon
           armedHome: armed?.home,
           armedAway: armed?.away,
           alertsOnly,
-          alarmKind,
-          chirpTone,
+          alarmKind: alarmKind ?? device.alarmKind,
+          ...entryChanges(body),
+          sensorKind: body.sensorKind ?? device.suggestedSensorKind,
         });
         res.status(201).json(sensor);
       } catch (err) {
