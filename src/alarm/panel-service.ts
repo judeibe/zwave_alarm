@@ -231,12 +231,35 @@ export class PanelService extends EventEmitter {
     return this.submit('disarm_zone', { ...options, zoneId });
   }
 
-  /** Opens (or restarts) a sensor's quick-exit window and returns when it ends. The caller checks the sensor allows it. */
+  /**
+   * Why a quick exit cannot start now, or null when it can. Follows Ring's Quick Exit: the sensor must allow it,
+   * the panel must be armed Home (Away has the exit delay), and the sensor must be closed, untampered and online.
+   */
+  quickExitBlockedReason(sensor: Pick<SensorDevice, 'category' | 'quickExitEnabled' | 'currentState' | 'tampered' | 'connectivityStatus'>): 'disabled' | 'not_armed_home' | 'sensor_not_ready' | null {
+    if (sensor.category !== 'intrusion' || !sensor.quickExitEnabled) {
+      return 'disabled';
+    }
+    if (this.panelRepo.getPanel().mode !== 'armed_home') {
+      return 'not_armed_home';
+    }
+    return sensor.currentState !== 'normal' || sensor.tampered || sensor.connectivityStatus !== 'online' ? 'sensor_not_ready' : null;
+  }
+
+  /**
+   * Opens a sensor's quick-exit window and returns when it ends; a repeat press restarts it. One sensor at a time:
+   * starting one ends any other. The caller checks `quickExitBlockedReason` first.
+   */
   startQuickExit(sensorId: string): number {
     const until = Date.now() + QUICK_EXIT_WINDOW_MS;
+    this.quickExitUntil.clear();
     this.quickExitUntil.set(sensorId, until);
     logger.info('quick exit started', { sensorId });
     return until;
+  }
+
+  /** Ends a sensor's window early: its door closed, so it is fully armed again. */
+  endQuickExit(sensorId: string): void {
+    this.quickExitUntil.delete(sensorId);
   }
 
   private inQuickExit(sensorId: string): boolean {

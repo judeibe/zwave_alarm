@@ -38,11 +38,23 @@ const DOOR_STATE_PROPERTY_KEYS = new Set(['Door state', 'Door state (simple)']);
 const DOOR_CLOSED_EVENT = 23;
 /** Notification type 7 (Home Security) and its tamper events: 3 = cover removed, 9 = product moved. */
 const HOME_SECURITY_TYPE = 7;
+/**
+ * Notification types that say nothing about a breach: Power Management (8) and System (9). A System "Heartbeat"
+ * (event 5) is what a Ring contact sensor sends when its button is pressed; it must never count as a breach.
+ */
+const NON_BREACH_NOTIFICATION_TYPES = new Set([8, 9]);
+const SYSTEM_TYPE = 9;
+const HEARTBEAT_EVENT = 5;
 const TAMPER_EVENTS = new Set([3, 9]);
 
 export interface SensorMapperOptions {
   /** Battery percentage at/below which a sensor is reported as a low-battery fault (FR-012). Defaults to 20. */
   lowBatteryThresholdPercent?: number;
+  /**
+   * Treat a System/Heartbeat notification as the sensor's button press and start its quick-exit window. Off by
+   * default: it is not yet known whether the sensor also sends the same notification as a periodic check-in.
+   */
+  quickExitOnHeartbeat?: boolean;
 }
 
 /**
@@ -69,6 +81,7 @@ export interface SensorMapperOptions {
  */
 export class SensorMapper extends EventEmitter {
   private readonly lowBatteryThresholdPercent: number;
+  private readonly quickExitOnHeartbeat: boolean;
   private readonly attachedNodeIds = new Set<number>();
 
   constructor(
@@ -80,6 +93,7 @@ export class SensorMapper extends EventEmitter {
   ) {
     super();
     this.lowBatteryThresholdPercent = options.lowBatteryThresholdPercent ?? DEFAULT_LOW_BATTERY_THRESHOLD_PERCENT;
+    this.quickExitOnHeartbeat = options.quickExitOnHeartbeat ?? false;
   }
 
   /**
@@ -135,6 +149,12 @@ export class SensorMapper extends EventEmitter {
       // TS can't correlate `args`'s type to the `ccId` check above (both are derived from the same
       // Parameters<ZWaveNotificationCallback> union, but the two are checked independently), so narrow explicitly.
       const notificationArgs = args as ZWaveNotificationCallbackArgs_NotificationCC;
+      if (NON_BREACH_NOTIFICATION_TYPES.has(notificationArgs.type)) {
+        if (notificationArgs.type === SYSTEM_TYPE && notificationArgs.event === HEARTBEAT_EVENT && this.quickExitOnHeartbeat) {
+          this.handleButtonPress(sensor);
+        }
+        return;
+      }
       if (notificationArgs.type === HOME_SECURITY_TYPE) {
         if (TAMPER_EVENTS.has(notificationArgs.event)) {
           this.applyTamper(sensor, true); // a tamper is not a breach
@@ -151,6 +171,16 @@ export class SensorMapper extends EventEmitter {
       // derived low-battery check reflects it until the next numeric "value updated" reading arrives.
       this.applyBatteryLevel(sensor, this.lowBatteryThresholdPercent);
     }
+  }
+
+  /** The sensor's button was pressed: open its quick-exit window when the sensor and the panel allow it. */
+  private handleButtonPress(sensor: SensorDevice): void {
+    const blocked = this.panelService.quickExitBlockedReason(sensor);
+    if (blocked) {
+      logger.info('quick exit not started', { sensorId: sensor.id, reason: blocked });
+      return;
+    }
+    this.panelService.startQuickExit(sensor.id);
   }
 
   private handleValueUpdated(nodeId: number, args: ZWaveNodeValueUpdatedArgs): void {
@@ -225,6 +255,9 @@ export class SensorMapper extends EventEmitter {
 
     const updated = this.sensorRepo.updateState(sensor.id, { currentState: nextState });
     this.emit('sensor_changed', updated);
+    if (nextState === 'normal') {
+      this.panelService.endQuickExit(sensor.id); // door closed: fully armed again
+    }
     if (nextState === 'breached') {
       this.panelService.reportSensorBreach(updated);
     }
